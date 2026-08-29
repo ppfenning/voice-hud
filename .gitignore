@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+*:Zone.Identifier
+
+# Runtime state — churns constantly, machine-local
+tasks.json
+standby.json
+mute.json
+inbox.json
+inbox_history.json
+voice_override.json
+listening_heartbeat.json
+wake_debounce.json
+gate_mode.json
+says.json
+*.pid
+
+# macOS-only launchers, if you keep local unshared copies
+*.applescript

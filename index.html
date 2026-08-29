@@ -1,0 +1,2505 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jarvis</title>
+<style>
+  /* J.A.R.V.I.S. palette (2026-08-19 rebrand): arc-reactor blue primary on
+     near-black, restrained gold for headings/trim, and ONE unified hot-rod
+     red for every alert-family state (failed ops, offline, muted, speaking
+     tint) — no second red anywhere. Amber stays the working/degraded family,
+     distinct from the gold trim. */
+  :root {
+    --bg: #02060f;
+    --bg2: #061a2e;
+    --cyan: #4fc3f7;
+    --cyan-dim: #2d6d8f;
+    --cyan-glow: rgba(79, 195, 247, .55);
+    --active-glow: rgba(79, 195, 247, .25);
+    --white: #e8f6ff;
+    --red: #ff3b30;
+    --amber: #ffc46b;
+    /* MUTED slate (08-19): deliberately outside the whole active palette —
+       not blue (listening), not amber (working), not red (speaking/alert/
+       offline). Desaturated grey-violet reads as POWERED DOWN rather than
+       as another kind of activity, and is never touched by applyTheme(), so
+       "off" looks identical in all four themes. */
+    --mute: #79839e;
+    --mute-dim: #4a5268;
+    --mute-glow: rgba(121, 131, 158, .5);
+    --gold: #e3c07a;
+    --gold-dim: #9c7c3c;
+    --gold-glow: rgba(227, 192, 122, .4);
+    --panel: rgba(6, 18, 31, .72);
+    --line: rgba(79, 195, 247, .2);
+    --border: rgba(45, 109, 143, .55);
+    --mono: "SF Mono", "Menlo", "Consolas", monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background:
+      radial-gradient(ellipse at 50% 40%, var(--bg2) 0%, var(--bg) 65%),
+      var(--bg);
+    color: var(--white);
+    font-family: var(--mono);
+    display: grid;
+    grid-template-columns: 1fr 400px;
+    transition: grid-template-columns .45s ease;
+    overflow: hidden;
+    position: relative;
+  }
+  body.feedless { grid-template-columns: 1fr 0px; }
+  body.feedless .feed { border-left: none; }
+  #feedToggle {
+    position: fixed; right: 400px; top: 50%; transform: translateY(-50%);
+    z-index: 5; cursor: pointer; background: var(--panel);
+    border: 1px solid var(--line); border-right: none; color: var(--cyan-dim);
+    font-family: var(--mono); font-size: .8rem; padding: .9rem .3rem;
+    border-radius: 6px 0 0 6px; transition: right .45s ease, color .15s;
+  }
+  #feedToggle:hover { color: var(--cyan); }
+  body.feedless #feedToggle { right: 0; }
+  body::before {
+    content: ""; position: fixed; inset: 0; pointer-events: none;
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px),
+      linear-gradient(rgba(79, 195, 247, .05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(79, 195, 247, .05) 1px, transparent 1px);
+    background-size: 90px 90px, 90px 90px, 18px 18px, 18px 18px;
+    opacity: .12;
+  }
+  body::after {
+    content: ""; position: fixed; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(0deg,
+      rgba(255,255,255,.025) 0px, rgba(255,255,255,.025) 1px,
+      transparent 1px, transparent 4px);
+    mix-blend-mode: overlay;
+    animation: flicker 7s infinite;
+  }
+  @keyframes flicker {
+    0%, 100% { opacity: .8; } 92% { opacity: .8; }
+    93% { opacity: .3; } 94% { opacity: .9; } 96% { opacity: .5; } 97% { opacity: .8; }
+  }
+
+  /* ambient state tint — whole-page glow readable across the room */
+  #tint {
+    position: fixed; inset: 0; pointer-events: none; z-index: 3;
+    opacity: 0; transition: opacity .6s ease, box-shadow .6s ease;
+  }
+  #tint.listening { opacity: 1; box-shadow: inset 0 0 110px 12px var(--cyan-glow); }
+  #tint.speaking  { opacity: 1; box-shadow: inset 0 0 115px 15px rgba(255,59,48,.55); animation: speakpulse 1.15s ease-in-out infinite; }
+  @keyframes speakpulse {
+    50% { box-shadow: inset 0 0 165px 28px rgba(255,59,48,.75); }
+  }
+  #tint.working   { opacity: 1; box-shadow: inset 0 0 100px 10px rgba(255,196,107,.45); }
+  /* muted outranks every activity tint below and never animates */
+  #tint.muted     { opacity: 1; box-shadow: inset 0 0 130px 16px var(--mute-glow); animation: none !important; }
+
+  /* motion budget tiers — calm: only the breathing reticle moves;
+     active: sweeps/arcs allowed; alert: the ONLY pulsing red is a failed op */
+  body.calm::after { animation: none; opacity: .35; }
+  body.calm #tint { animation: none !important; }
+  body.calm .ops .op.running { animation: none; }
+  body.calm .status-line.offline { animation: none; }
+  .ops .op.failed { animation: none; }
+  body.alert .ops .op.failed { animation: gatepulse 1.4s ease-in-out infinite; }
+  body.alert .ops .op.running { animation: none; }
+
+  /* ambient screensaver — after 5 idle minutes everything dims to a clock */
+  body { transition: transform 4s ease; }
+  .feed, .voices, .ops, #plans, .asana-widget, .readout, .mute-btn, .status-line, .corner, .stats {
+    transition: opacity 2s ease;
+  }
+  body.ambient .feed, body.ambient .voices, body.ambient .ops, body.ambient #plans,
+  body.ambient .asana-widget, body.ambient .readout, body.ambient .mute-btn,
+  body.ambient .status-line, body.ambient .corner, body.ambient .stats { opacity: .12; }
+  #ambientClock {
+    position: absolute; top: 15%; left: 50%; transform: translateX(-50%);
+    font-size: 140px; line-height: 1; color: rgba(79, 195, 247, .3);
+    font-variant-numeric: tabular-nums; z-index: 2; pointer-events: none;
+    opacity: 0; transition: opacity 2s ease;
+  }
+  body.ambient #ambientClock { opacity: 1; }
+
+  /* big-numeral stat row — 10-foot glanceable */
+  .stats {
+    position: absolute; top: 88px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 2.8rem; z-index: 2; text-align: center;
+  }
+  /* stat row stays CYAN in every theme (Pat) — literal values, not theme vars
+     (literals updated to the arc-reactor blue on the 08-19 JARVIS pass) */
+  .stats .n {
+    font-size: 54px; font-weight: 700; line-height: 1; color: #4fc3f7;
+    font-variant-numeric: tabular-nums; text-shadow: 0 0 14px rgba(79, 195, 247, .55);
+  }
+  .stats .n.zero { opacity: .25; text-shadow: none; }
+  .stats .l { font-size: .58rem; letter-spacing: .3em; color: #2d6d8f; text-transform: uppercase; margin-top: .35rem; }
+
+  /* boot sequence overlay */
+  #boot {
+    position: fixed; inset: 0; z-index: 8; display: none;
+    align-items: center; justify-content: center; flex-direction: column;
+    background: rgba(3,8,18,.85); backdrop-filter: blur(3px);
+  }
+  #boot.run { display: flex; animation: bootfade 2.6s ease forwards; }
+  #boot .ring {
+    width: 120px; height: 120px; border-radius: 50%;
+    border: 2px solid var(--cyan); box-shadow: 0 0 40px var(--cyan-glow);
+    animation: bootring 1.2s ease-out infinite;
+  }
+  #boot .label {
+    margin-top: 1.6rem; color: var(--cyan); letter-spacing: .5em; font-size: 1rem;
+    text-transform: uppercase; text-shadow: 0 0 14px var(--cyan-glow);
+    animation: bootlabel 2.6s steps(12) forwards;
+  }
+  @keyframes bootring { 0% { transform: scale(.4); opacity: 1; } 100% { transform: scale(1.6); opacity: 0; } }
+  @keyframes bootlabel { 0% { opacity: 0; } 30% { opacity: 1; } 100% { opacity: 1; } }
+  @keyframes bootfade { 0% { opacity: 0; } 12% { opacity: 1; } 80% { opacity: 1; } 100% { opacity: 0; display: none; } }
+
+  /* ---- left: reticle stage ---- */
+  .stage { position: relative; display: flex; align-items: center; justify-content: center; }
+  canvas#viz { width: 620px; height: 620px; max-width: 88%; }
+
+  /* gold trim on the stage's targeting brackets — the restrained gold accent
+     of the JARVIS pass (amber stays the working/degraded state family) */
+  .corner { position: absolute; width: 34px; height: 34px; border: 1px solid var(--gold-dim); opacity: .9; }
+  .corner.tl { top: 18px; left: 18px; border-right: 0; border-bottom: 0; }
+  .corner.tr { top: 18px; right: 18px; border-left: 0; border-bottom: 0; }
+  .corner.bl { bottom: 18px; left: 18px; border-right: 0; border-top: 0; }
+  .corner.br { bottom: 18px; right: 18px; border-left: 0; border-top: 0; }
+
+  .readout { position: absolute; font-size: .68rem; letter-spacing: .14em; color: var(--cyan); text-shadow: 0 0 8px var(--cyan-glow); line-height: 1.9; z-index: 2; }
+  .readout .dim { color: var(--cyan-dim); }
+  /* always-on wake listener indicator: ARMED (cyan, matches readout default)
+     = always_on_listener.py's heartbeat is fresh; OFFLINE (red) = the daemon
+     isn't running or hasn't checked in — this is what the status line's
+     resting LISTENING state is honest about (Pat, 08-17: a false "armed"
+     reading is worse than none) */
+  #roListening.offline { color: var(--red); text-shadow: 0 0 8px rgba(255,59,48,.5); }
+  #roListening.degraded { color: var(--amber); text-shadow: 0 0 8px rgba(255,196,107,.55); }
+  /* while muted the daemon is alive but deliberately not capturing —
+     "ARMED" there was technically true and practically a lie */
+  #roListening.paused { color: var(--mute); text-shadow: 0 0 8px var(--mute-glow); }
+  #ro-tl { top: 30px; left: 34px; }
+  #ro-tr { top: 30px; right: 34px; text-align: right; }
+  #ro-bl { bottom: 30px; left: 34px; }
+  #ro-br { bottom: 30px; right: 34px; text-align: right; }
+
+  /* status line — the two user-facing states (Pat, 08-17): LISTENING is the
+     default resting state, always an invitation to speak; MUTED is the hard
+     off. Everything else (speaking/hearing/processing/working) is activity
+     indication layered on top of "still listening", never a mode that
+     implies deafness. */
+  .status-line {
+    position: absolute; bottom: 96px; left: 50%; transform: translateX(-50%);
+    font-size: .82rem; letter-spacing: .34em; text-transform: uppercase;
+    color: var(--cyan); text-shadow: 0 0 10px var(--cyan-glow); z-index: 2;
+  }
+  .status-line::before { content: "◈ "; }
+  .status-line.speaking   { color: var(--red); text-shadow: 0 0 10px rgba(255,59,48,.6); }
+  .status-line.processing { color: var(--amber); text-shadow: 0 0 10px rgba(255,196,107,.6); }
+  .status-line.muted {
+    color: var(--mute); text-shadow: 0 0 10px var(--mute-glow);
+  }
+  .status-line.offline {
+    color: var(--red); text-shadow: 0 0 10px rgba(255,59,48,.6);
+    animation: gatepulse 2.2s ease-in-out infinite;
+  }
+
+  /* settings gear — voice select lives behind it, left edge stays clean */
+  #gearBtn {
+    position: absolute; left: 34px; top: 96px; z-index: 4; cursor: pointer;
+    background: transparent; border: 1px solid var(--border);
+    color: var(--cyan-dim); font-size: .9rem; padding: .3rem .55rem;
+    font-family: var(--mono); transition: all .15s;
+  }
+  #gearBtn:hover, body.settings-open #gearBtn { color: var(--cyan); border-color: var(--cyan); }
+  #voices { display: none; }
+  body.settings-open #voices { display: flex; }
+
+  /* voice switcher */
+  .voices {
+    position: absolute; left: 34px; top: 50%; transform: translateY(-50%);
+    display: flex; flex-direction: column; gap: .4rem; z-index: 3;
+  }
+  .voices .vlabel { font-size: .6rem; letter-spacing: .22em; color: var(--gold-dim); margin-bottom: .2rem; }
+  .voices .roster { display: flex; flex-direction: column; gap: .4rem; }
+  /* the voice roster's length is server-driven (12 voices today, measured
+     367px uncapped) and the drawer is vertically centered — uncapped, a
+     long roster pushes the drawer's bottom edge down into the always-
+     visible #cmdPanel (top = 100vh - 297px), which paints over it since
+     #cmdPanel is later in DOM order at the same z-index. Cap just the
+     roster (not the whole drawer) so STYLE/THEME stay put and only the
+     voice list scrolls; the other drawer content measures ~126px, so this
+     keeps the drawer's total height under 100vh - 297px - margin for any
+     viewport height, at the cost of scrolling once there are enough
+     voices to need it. */
+  #voiceRoster { max-height: calc(100vh - 750px); overflow-y: auto; overflow-x: hidden; }
+  .voices .row { display: flex; flex-direction: row; flex-wrap: wrap; gap: .35rem; }
+  .voices button {
+    font-family: var(--mono); font-size: .66rem; letter-spacing: .12em;
+    background: transparent; color: var(--cyan-dim);
+    border: 1px solid var(--border);
+    padding: .32rem .6rem; cursor: pointer; text-align: left;
+    text-transform: uppercase; transition: all .15s;
+  }
+  .voices button:hover { color: var(--cyan); border-color: var(--cyan); }
+  .voices a {
+    font-family: var(--mono); font-size: .66rem; letter-spacing: .12em;
+    color: var(--cyan-dim); border: 1px solid var(--border);
+    padding: .32rem .6rem; text-align: left; text-transform: uppercase;
+    text-decoration: none; transition: all .15s; display: block;
+  }
+  .voices a.live { color: var(--cyan); }
+  .voices a:hover { border-color: var(--cyan); color: var(--cyan); }
+  .voices a.dead { opacity: .4; pointer-events: none; }
+  .voices button.active {
+    color: var(--cyan); border-color: var(--cyan);
+    box-shadow: 0 0 12px var(--active-glow); text-shadow: 0 0 6px var(--cyan-glow);
+  }
+  .voices button.pending { color: var(--amber); border-color: var(--amber); }
+  .voices .cmd-note { font-size: .54rem; letter-spacing: .08em; color: var(--cyan-dim); opacity: .65; }
+
+  /* bottom-left commands panel — pulled OUT of the settings drawer (Pat,
+     08-17) so it's ALWAYS visible/clickable, not gated behind ⚙. Fixed,
+     static content (5 buttons, unlike the dynamic voice roster) so its
+     rendered height is knowable (~188px): anchors the corner at the same
+     bottom:110px slot the plans stack used to occupy — already proven
+     clear of #ro-bl (ends ~bottom:75px) and the corner bracket. NOT part
+     of the settings-open fade below — staying visible with the drawer
+     open is the whole point of the move. */
+  .cmd-panel {
+    position: absolute; left: 34px; bottom: 110px; z-index: 3;
+    max-width: 230px;
+  }
+
+  /* left-column stack: visual plans, bottom-anchored, grows upward — the
+     panel keeps the .voices look but drops absolute positioning (.stacked)
+     so the wrapper's flex column places it. Now sits ABOVE the commands
+     panel (bottom:340px clears .cmd-panel's ~188px + a margin); max-height
+     bounds it in vh so no matter the viewport size it can never grow up
+     into #gearBtn (top:96px, same left:34px column). Collapses while the
+     settings drawer is open: the drawer (#voices) is also left-anchored and
+     vertically centered at the SAME z-index, so without this a tall stack
+     paints over the drawer's buttons (later in DOM order wins the tie) and
+     eats its clicks — this is the overlap Pat hit. */
+  .left-stack {
+    position: absolute; left: 34px; bottom: 340px; z-index: 3;
+    display: flex; flex-direction: column; gap: .6rem; max-width: 230px;
+    max-height: calc(100vh - 470px); overflow-y: auto; overflow-x: hidden;
+    transition: opacity .15s ease;
+  }
+  body.settings-open .left-stack { opacity: 0; pointer-events: none; }
+  .voices.stacked { position: static; left: auto; top: auto; bottom: auto; transform: none; }
+
+  /* ---- right rail: ONE bounded column (08-19 overlap fix) ----
+     WHAT WAS ACTUALLY WRONG: the due/overdue + kanban stack, the ops panel,
+     and the spawn controls were three INDEPENDENTLY absolutely-positioned
+     siblings anchored to three different reference points — top:96px,
+     top:50% (centred), and bottom:96px — each with a hand-tuned vh cap.
+     Nothing made those bands disjoint, and they weren't: the widget stack
+     ran 96px..calc(50vh-170px) while ops occupied 35vh..65vh, so on a
+     952px-tall window they overlapped by 69px (88px at 1080, 46px at 800 —
+     it overlaps at EVERY size, it just wasn't visible until the widgets
+     grew tall enough to fill their band, which is what the 7-item fleet
+     did). .ops is later in DOM at the same z-index, so it painted straight
+     over the kanban and due lists.
+     THE FIX: no more competing anchors. One rail spans the available height
+     and the three panels are ordinary flow children of a flex column, so
+     the layout engine — not arithmetic in a comment — guarantees they can
+     never intersect. Each child carries min-height:0 + its own overflow so
+     it scrolls INSIDE its region instead of pushing its neighbours (the
+     classic flex-child trap: without min-height:0 a flex item refuses to
+     shrink below its content and overflows the container instead). */
+  .right-rail {
+    position: absolute; right: 34px; top: 96px; bottom: 82px; z-index: 3;
+    width: 250px; display: flex; flex-direction: column; gap: .7rem;
+    /* Last-resort escape valve: the children's min-height floors (kept
+       because "unreadable to save space" is not a fix) total ~300px, so on
+       an extremely short window they would otherwise push the spawn
+       controls out past the rail's bottom edge and over the corner
+       readout. Measured: at a 300px rail the last child escaped by design
+       before this line existed. Scrolling the whole rail is the honest
+       out — everything stays legible, nothing overlaps, and the rail
+       itself scrolls only in a window far shorter than Pat ever uses. */
+    overflow-y: auto; overflow-x: hidden;
+  }
+  .right-rail::-webkit-scrollbar { width: 4px; }
+  .right-rail::-webkit-scrollbar-thumb { background: var(--cyan-dim); }
+  .right-rail > * { min-height: 0; overflow-y: auto; overflow-x: hidden; }
+  .right-rail > *::-webkit-scrollbar { width: 4px; }
+  .right-rail > *::-webkit-scrollbar-thumb { background: var(--cyan-dim); }
+  /* Reading priority when space is tight (Pat glances for what's RUNNING and
+     what's OVERDUE): ops takes the leftover space and never shrinks below a
+     legible 6rem; due/overdue gives ground slowly; kanban is the least
+     urgent panel so it compresses first (shrink factor 3). Nothing is
+     allowed to compress to unreadable — each keeps a min-height floor and
+     scrolls within it rather than shrinking further. */
+  #dueSoon { flex: 0 1 auto; min-height: 4rem; }
+  #kanban  { flex: 0 3 auto; min-height: 3rem; }
+  .right-rail .ops { flex: 1 1 auto; min-height: 6rem; }
+  .right-rail .spawn { flex: 0 0 auto; overflow: visible; }
+
+  /* asana widgets — legible from a distance: item text well above the tiny
+     voice-select buttons, tabular numerals on the days-left, panel label
+     visually separated with a rule underneath */
+  .asana-widget .vlabel {
+    font-size: .74rem; letter-spacing: .16em; color: var(--gold-dim);
+    text-transform: uppercase; margin-bottom: .35rem; padding-bottom: .3rem;
+    border-bottom: 1px solid var(--border);
+  }
+  /* verified-vs-assumed (Pat, 08-18): shared by every "cache age" readout —
+     Asana widgets AND the visual-plans panel (.voices .vlabel .fetched) —
+     so one rule keeps them all in Nicole's DEGRADED vocabulary. Plain =
+     within its own TTL, i.e. as fresh as the panel ever promises. .stale =
+     the cache is older than the TTL it claims, i.e. what's on screen is an
+     ASSUMED fact, not a just-verified one — same amber family as the
+     listener's DEGRADED state, never the same look as fresh. */
+  .vlabel .fetched {
+    font-size: .56rem; color: var(--cyan-dim); opacity: .6;
+    letter-spacing: .04em; text-transform: none; margin-left: .4rem;
+  }
+  .vlabel .fetched.stale {
+    color: var(--amber); opacity: .95;
+    text-shadow: 0 0 6px rgba(255,196,107,.5);
+  }
+  .asana-widget .info-row {
+    font-size: .85rem; letter-spacing: .02em; color: var(--cyan-dim);
+    border: 1px solid var(--border); padding: .4rem .6rem;
+    display: flex; justify-content: space-between; gap: .6rem;
+  }
+  .asana-widget .info-row .days { color: var(--cyan); white-space: nowrap; font-variant-numeric: tabular-nums; }
+  /* due/overdue task rows (08-19, Pat's working filter): overdue = the
+     unified alert red + chip; due today = gold highlight; rest stay cyan */
+  .asana-widget .info-row .task-name {
+    flex: 1; min-width: 0; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .asana-widget .info-row .tag {
+    color: var(--gold-dim); font-size: .6rem; letter-spacing: .08em;
+    white-space: nowrap; align-self: center; text-transform: uppercase;
+  }
+  .asana-widget .info-row.overdue { border-color: rgba(255,59,48,.55); }
+  .asana-widget .info-row.overdue .days { color: var(--red); text-shadow: 0 0 6px rgba(255,59,48,.5); }
+  .asana-widget .info-row.today .days { color: var(--gold); text-shadow: 0 0 6px var(--gold-glow); }
+  .asana-widget .due-chip {
+    font-size: .5rem; letter-spacing: .1em; padding: .02rem .28rem; margin-left: .3rem;
+    border: 1px solid var(--red); border-radius: 8px; color: var(--red);
+    text-transform: uppercase; vertical-align: middle;
+  }
+  .asana-widget .more-row {
+    font-size: .64rem; color: var(--cyan-dim); opacity: .85;
+    padding: .3rem .1rem 0; letter-spacing: .08em;
+  }
+  .asana-widget .kanban-section {
+    font-size: .85rem; color: var(--cyan-dim);
+    border: 1px solid var(--border); padding: .4rem .6rem;
+  }
+  .asana-widget .kanban-section .sec-head {
+    display: flex; justify-content: space-between; color: var(--cyan);
+    text-transform: uppercase; letter-spacing: .06em; font-variant-numeric: tabular-nums;
+  }
+  .asana-widget .kanban-section .ticket {
+    font-size: .8rem; opacity: .8; padding-left: .35rem; margin-top: .15rem;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+
+  /* active ops panel */
+  /* ops is now a flow child of .right-rail (see the overlap note above) —
+     no anchor of its own, so it cannot be positioned over anything. It
+     still bounds + scrolls internally: click-to-inspect can make one op
+     several lines tall, and the fleet itself grows (7 live ops is what
+     surfaced the original bug). */
+  .ops {
+    display: flex; flex-direction: column; gap: .45rem;
+    text-align: right; align-items: flex-end;
+  }
+  .ops .olabel { font-size: .6rem; letter-spacing: .22em; color: var(--gold-dim); margin-bottom: .2rem; }
+  .ops .op {
+    font-size: .64rem; letter-spacing: .1em; line-height: 1.5;
+    border-right: 2px solid var(--cyan-dim); padding: .1rem .5rem .1rem 0;
+    color: var(--cyan-dim); text-transform: uppercase;
+  }
+  .ops .op.running { color: var(--amber); border-color: var(--amber); animation: gatepulse 1.8s ease-in-out infinite; }
+  .ops .op.done    { color: var(--cyan); border-color: var(--cyan); }
+  .ops .op.failed  { color: var(--red); border-color: var(--red); }
+  /* ORPHANED (08-18, round 2): server-flagged when a "running" op's
+     heartbeat_file (see server.py task_liveness) either stat()s stale past
+     HEARTBEAT_STALE_SECONDS or can't be found at all — a REAL probe on the
+     agent itself, not on how recently the orchestrator re-posted (round 1
+     used POST recency and produced a false positive on a genuinely healthy
+     31-minute agent — see the server.py comment for the full story).
+     Deliberately amber-but-NOT-pulsing: .running's gatepulse means "this is
+     actively happening"; a confirmed ghost isn't, so it gets the same amber
+     family as DEGRADED (an admitted-stale state) with no motion — not the
+     same look as a live op, and not the red pulse that stays reserved for
+     genuinely failed ops (see body.alert below). */
+  .ops .op.orphaned { color: var(--amber); border-color: var(--amber); }
+  /* UNKNOWN (08-18, round 2): the op carries NO heartbeat_file at all, so
+     there is nothing to probe — this is pure self-report, same trust level
+     the whole app used to run on. It must not look like a confirmed-alive
+     .running op (that's the false-confidence bug) OR a confirmed-dead
+     .orphaned one (we have no evidence of death either — hiding it or
+     alarming about it would both be claims we can't back up). Same amber,
+     no pulse, but a DASHED border — "sensor not connected", visually
+     distinct from orphaned's solid one so the two "don't trust this"
+     states aren't mistaken for each other. */
+  .ops .op.unknown { color: var(--amber); border-color: var(--amber); border-right-style: dashed; }
+  .ops .op .st { font-size: .54rem; color: inherit; opacity: .7; display: block; }
+  /* click-to-inspect: header row is clickable, detail expands beneath it —
+     inline, no modal, matches the panel's own hugging-border-right look
+     when collapsed (op-detail is [hidden], contributes no width) */
+  .ops .op { cursor: pointer; }
+  .ops .op:hover { text-shadow: 0 0 6px currentColor; }
+  .ops .op .op-caret { opacity: .8; margin-right: .1em; }
+  .ops .op-detail {
+    width: 210px; margin: .2rem 0 0; padding: .4rem .55rem; text-align: left;
+    border: 1px solid var(--border); background: rgba(8, 20, 34, .6);
+    font-size: .62rem; line-height: 1.55; letter-spacing: .03em;
+    color: var(--cyan-dim); text-transform: none;
+  }
+  .ops .op-detail .persona {
+    color: var(--cyan); text-transform: uppercase; letter-spacing: .14em;
+    font-size: .62rem; margin-bottom: .3rem; text-shadow: 0 0 6px var(--cyan-glow);
+  }
+  .ops .op-detail .label-full { color: var(--white); margin-bottom: .3rem; }
+  .ops .op-detail .meta {
+    text-transform: uppercase; letter-spacing: .08em; font-size: .56rem;
+    color: var(--cyan-dim); opacity: .85; margin-bottom: .3rem;
+  }
+  .ops .op-detail .desc { color: var(--cyan-dim); }
+
+  /* spawn a second (text) session */
+  .spawn {
+    display: flex; flex-direction: column; gap: .35rem; align-items: flex-end;
+  }
+  .spawn select, .spawn button {
+    font-family: var(--mono); font-size: .6rem; letter-spacing: .1em;
+    background: transparent; color: var(--cyan-dim);
+    border: 1px solid var(--border); padding: .28rem .5rem;
+    text-transform: uppercase; cursor: pointer; transition: all .15s;
+  }
+  .spawn select option { background: var(--bg); color: var(--cyan); }
+  .spawn select:hover, .spawn button:hover { color: var(--cyan); border-color: var(--cyan); }
+  .spawn button.armed { color: var(--amber); border-color: var(--amber); }
+
+  /* mute toggle */
+  .mute-btn {
+    position: absolute; top: 26px; left: 50%; transform: translateX(-50%);
+    z-index: 4; font-family: var(--mono); font-size: .72rem; letter-spacing: .26em;
+    text-transform: uppercase; cursor: pointer; padding: .55rem 1.5rem;
+    background: transparent; color: var(--cyan); border: 1px solid var(--cyan-dim);
+    text-shadow: 0 0 8px var(--cyan-glow); transition: all .15s;
+  }
+  .mute-btn:hover { border-color: var(--cyan); }
+  /* 08-19: quiet/muted moved OFF red onto the slate family. Red is now
+     exclusively speaking/alert/offline — a deliberate off-state must not
+     share a colour with a fault. No pulse either: pulsing reads as "active
+     alarm", and this is the opposite. (#inboxMic.recording keeps mutepulse
+     + red — that one IS live capture.) */
+  .mute-btn.muted {
+    color: var(--mute); border-color: var(--mute);
+    background: rgba(121, 131, 158, .1);
+    text-shadow: 0 0 8px var(--mute-glow);
+    animation: none;
+  }
+  /* skip (08-19): cut the sentence in flight and move on, WITHOUT muting
+     (Pat -- "skip to the end of a sentence ... don't need the full
+     playthrough"). AMBER while live, the working/transport family: this is
+     an ADVANCE, so it must not wear slate (the off-state) or red (a fault).
+     Anchored on its own below the mute toggle rather than sharing a row
+     with it -- the mute label changes length when muted, so any side-by-side
+     offset would overlap in one of the two states. Sized to land clear of
+     .stats at top:88px. */
+  .skip-btn {
+    position: absolute; top: 64px; left: 50%; transform: translateX(-50%);
+    z-index: 4; font-family: var(--mono); font-size: .58rem; letter-spacing: .24em;
+    text-transform: uppercase; cursor: pointer; padding: .16rem .9rem;
+    background: transparent; color: var(--cyan-dim); border: 1px solid var(--cyan-dim);
+    /* deliberately NO panelBoot here: that keyframe animates `transform`,
+       which would stomp the translateX(-50%) this control is centred with. */
+    opacity: .55;
+    transition: opacity 2s ease, color .15s, border-color .15s, text-shadow .15s;
+  }
+  /* only lights up while there is actually an utterance to cut; dim rather
+     than hidden the rest of the time, so it stays discoverable without
+     implying it does anything when nothing is playing */
+  body.tts-live .skip-btn {
+    color: var(--amber); border-color: var(--amber); opacity: 1;
+    text-shadow: 0 0 8px rgba(255,196,107,.55);
+  }
+  .skip-btn:hover { color: var(--amber); border-color: var(--amber); opacity: 1; }
+  .skip-btn.fired { color: var(--cyan); border-color: var(--cyan); opacity: 1; }
+  body.ambient .skip-btn { opacity: .12; }
+
+  @keyframes mutepulse {
+    50% { box-shadow: 0 0 26px rgba(255,59,48,.45); }
+  }
+
+  .mic-gate {
+    position: absolute; inset: 0; z-index: 6; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(3, 8, 18, .78); backdrop-filter: blur(4px);
+  }
+  .mic-gate span {
+    border: 1px solid var(--cyan-dim); padding: 1rem 2.2rem;
+    color: var(--cyan); letter-spacing: .2em; font-size: .8rem;
+    text-transform: uppercase; text-shadow: 0 0 8px var(--cyan-glow);
+    animation: gatepulse 1.6s ease-in-out infinite;
+  }
+  @keyframes gatepulse { 50% { box-shadow: 0 0 24px rgba(79,195,247,.25); } }
+  .mic-gate.hidden { display: none; }
+
+  /* ---- right: comms feed ---- */
+  .feed {
+    background: var(--panel);
+    border-left: 1px solid var(--line);
+    display: flex; flex-direction: column; height: 100vh;
+    backdrop-filter: blur(3px);
+    min-width: 0; overflow: hidden;
+  }
+  .feed header {
+    padding: 1.1rem 1.3rem .9rem;
+    border-bottom: 1px solid var(--line);
+    font-size: .7rem; letter-spacing: .3em; color: var(--cyan);
+    text-shadow: 0 0 8px var(--cyan-glow); text-transform: uppercase;
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  .feed header .dim { color: var(--cyan-dim); letter-spacing: .1em; }
+  .feed header .tabs { display: flex; gap: .9rem; }
+  .feed header .tabs span { cursor: pointer; color: var(--cyan-dim); transition: color .15s; }
+  .feed header .tabs span:hover { color: var(--cyan); }
+  .feed header .tabs span.on { color: var(--cyan); text-shadow: 0 0 8px var(--cyan-glow); border-bottom: 1px solid var(--cyan); padding-bottom: .15rem; }
+  .line.work { border-color: var(--amber); background: rgba(255, 196, 107, .06); white-space: pre-wrap; font-size: .72rem; }
+  .line.work .who { color: var(--amber); text-shadow: 0 0 6px rgba(255,196,107,.5); }
+  .lines { flex: 1; overflow-y: auto; padding: 1rem 1.1rem; display: flex; flex-direction: column; gap: .85rem; }
+  .lines::-webkit-scrollbar { width: 4px; }
+  .lines::-webkit-scrollbar-thumb { background: var(--cyan-dim); }
+  .line { font-size: .82rem; line-height: 1.55; padding: .55rem .8rem .6rem; border-left: 2px solid; animation: pop .3s ease; }
+  @keyframes pop { from { opacity: 0; transform: translateX(8px); } }
+  .line .who { display: flex; justify-content: space-between; font-size: .62rem; letter-spacing: .24em; margin-bottom: .25rem; text-transform: uppercase; }
+  .line .who .t { color: var(--cyan-dim); letter-spacing: .08em; }
+  .line.you    { border-color: var(--white); background: rgba(234, 247, 255, .05); }
+  .line.you .who { color: #b9cfdd; }
+  .line.typed  { border-color: #b18cff; background: rgba(177, 140, 255, .06); }
+  .line.typed .who { color: #b18cff; }
+  .line .chip {
+    font-size: .56rem; letter-spacing: .12em; padding: .05rem .4rem;
+    border: 1px solid #b18cff; border-radius: 8px; color: #b18cff;
+    margin-left: .5rem; text-transform: uppercase; vertical-align: middle;
+  }
+  .line .chip.seen { opacity: .45; }
+  .line.claude { border-color: var(--cyan); background: rgba(127, 216, 255, .07); }
+  .line.claude .who { color: var(--cyan); text-shadow: 0 0 6px var(--cyan-glow); }
+  /* 08-18: text recovery (see resolve_spoken_text in server.py) is whole-
+     session now, but a converse call from OUTSIDE the live transcript
+     (rotated file, permission-blocked call, etc.) can still fail to
+     recover — that line is still the 200-char event-log prefix, not the
+     full utterance. Mark it rather than render it as if it were complete;
+     amber, same family as every other "assumed" marker on this page. */
+  .line .chip.trunc { border-color: var(--amber); color: var(--amber); }
+  /* 08-18: quiet-mode reply (POST /say) — an assistant line that was never
+     spoken (Pat muted, session skips the voice tool). Same cyan family as a
+     spoken claude line, just chipped "text" so the two are distinguishable. */
+  .line.say { border-color: var(--cyan); background: rgba(127, 216, 255, .07); }
+  .line.say .who { color: var(--cyan); text-shadow: 0 0 6px var(--cyan-glow); }
+  .line .chip.textonly { border-color: var(--cyan-dim); color: var(--cyan-dim); }
+
+  .telemetry {
+    border-top: 1px solid var(--line);
+    padding: .8rem 1.3rem .9rem;
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: .4rem;
+  }
+  .telemetry .cell { text-align: center; }
+  .telemetry .k { font-size: .56rem; letter-spacing: .18em; color: var(--cyan-dim); text-transform: uppercase; }
+  .telemetry .v { font-size: .85rem; color: var(--cyan); text-shadow: 0 0 8px var(--cyan-glow); margin-top: .15rem; }
+
+  .inbox { border-top: 1px solid var(--line); padding: .6rem .9rem .7rem; }
+  .inbox-row { display: flex; gap: .45rem; }
+  .inbox input {
+    flex: 1; width: auto; background: transparent; color: var(--white);
+    border: 1px solid var(--border); outline: none;
+    font-family: var(--mono); font-size: .8rem; padding: .45rem .7rem;
+    transition: border-color .15s;
+  }
+  .inbox input:focus { border-color: var(--cyan); }
+  .inbox input.sent::placeholder { color: var(--cyan); }
+  #inboxMic {
+    flex: 0 0 auto; font-family: var(--mono); font-size: .85rem;
+    background: transparent; color: var(--cyan-dim);
+    border: 1px solid var(--border); padding: .45rem .65rem;
+    cursor: pointer; transition: all .15s;
+  }
+  #inboxMic:hover { color: var(--cyan); border-color: var(--cyan); }
+  #inboxMic.recording {
+    color: var(--red); border-color: var(--red);
+    animation: mutepulse 1.4s ease-in-out infinite;
+  }
+  .mic-transcript {
+    font-size: .66rem; letter-spacing: .04em; color: var(--cyan-dim);
+    padding: 0 .05rem .4rem; min-height: 1em;
+  }
+  .mic-transcript.heard { color: var(--cyan); }
+  /* The gate heard you and declined — informational, NOT an alert. Amber is
+     this HUD's "attention, not failure" colour (processing, orphaned op,
+     truncated line); red stays reserved for ops that actually failed, which
+     is what .failed below is for. No pulse: nothing is in flight. */
+  .mic-transcript.rejected {
+    color: var(--amber); white-space: normal; line-height: 1.35;
+    border-left: 2px solid var(--amber); padding-left: .4rem;
+  }
+  .mic-transcript.rejected .why { color: var(--cyan-dim); }
+  .mic-transcript.failed { color: var(--red); }
+  .mic-transcript[hidden] { display: none; }
+
+  /* ---- MUTED stage badge (08-19) ----
+     Pat, verified live: while muted the heartbeat keeps a live `rms` (the
+     stream stays open for instant resume), so the visualiser kept bouncing
+     and muted looked identical to listening — "there is listening when I go
+     on mute mode, there's just no response." Colour alone was never going
+     to fix that, so the state is also SPELLED OUT (survives colour-blindness
+     and a glance from across the room) and the canvas is visibly damped. */
+  #muteBadge {
+    position: absolute; top: 50%; left: 50%;
+    transform: translate(-50%, -50%); z-index: 4;
+    display: none; flex-direction: column; align-items: center; gap: .5rem;
+    padding: 1.1rem 2.4rem; pointer-events: none; text-align: center;
+    border: 1px solid var(--mute); background: rgba(6, 10, 20, .72);
+    box-shadow: 0 0 40px rgba(121, 131, 158, .18);
+  }
+  body.muted #muteBadge { display: flex; }
+  #muteBadge .mb-main {
+    font-size: 1.5rem; letter-spacing: .42em; color: var(--mute);
+    text-transform: uppercase; text-shadow: 0 0 16px var(--mute-glow);
+    text-indent: .42em;
+  }
+  #muteBadge .mb-sub {
+    font-size: .62rem; letter-spacing: .2em; color: var(--mute-dim);
+    text-transform: uppercase;
+  }
+  /* the visualiser itself: desaturated and dimmed while muted, so even the
+     parts that keep moving (ring rotation) cannot read as live capture */
+  canvas#viz { transition: opacity .4s ease, filter .4s ease; }
+  body.muted canvas#viz { opacity: .42; filter: grayscale(.75); }
+  /* ambient screensaver must not fight the badge */
+  body.ambient #muteBadge { opacity: .35; transition: opacity 2s ease; }
+
+  /* ================= J.A.R.V.I.S. chrome (08-19 visual pass) =================
+     Reskin only: no new widgets, no layout moves — typographic identity, gold
+     trim, targeting brackets on existing panels, a one-shot boot-in, and a
+     thin border sweep on state change. All animation is transform/opacity,
+     one-shot or state-gated, so the all-day CPU cost stays near zero. */
+
+  /* main wordmark (top-left readout) — typographic, no images */
+  .readout .wordmark {
+    font-size: 1.05rem; font-weight: 700; letter-spacing: .3em;
+    color: var(--gold); text-shadow: 0 0 12px var(--gold-glow);
+  }
+  /* top-right corner identity — reads as the name, not the letterform */
+  .readout .corner-name {
+    color: var(--gold); letter-spacing: .18em; font-size: .8rem;
+    text-shadow: 0 0 10px var(--gold-glow);
+  }
+
+  /* data readouts line up like instruments */
+  .readout, .telemetry .v, .ops .op, .vlabel .fetched, .feed header .dim {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* targeting-reticle brackets on the existing side panels — gold trim,
+     two opposing corners, pure decoration (pointer-events preserved by
+     being pseudo-elements with no size overlap on controls) */
+  .asana-widget { position: relative; padding: 5px 4px; }
+  #plans { position: relative; padding: 5px 4px; }
+  .asana-widget::before, #plans::before, .cmd-panel::before {
+    content: ""; position: absolute; top: 0; left: 0; width: 12px; height: 12px;
+    border-top: 1px solid var(--gold-dim); border-left: 1px solid var(--gold-dim);
+    pointer-events: none;
+  }
+  .asana-widget::after, #plans::after, .cmd-panel::after {
+    content: ""; position: absolute; bottom: 0; right: 0; width: 12px; height: 12px;
+    border-bottom: 1px solid var(--gold-dim); border-right: 1px solid var(--gold-dim);
+    pointer-events: none;
+  }
+  .cmd-panel { padding: 5px 4px; }
+
+  /* thin border sweep under the status line, retriggered from poll() on any
+     state change — one-shot, transform/opacity only */
+  .status-line::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: -7px; height: 1px;
+    background: linear-gradient(90deg, transparent, currentColor, transparent);
+    transform: scaleX(0); opacity: 0; pointer-events: none;
+  }
+  .status-line.swept::after { animation: statesweep .7s ease-out; }
+  @keyframes statesweep {
+    0% { transform: scaleX(.1); opacity: .9; }
+    100% { transform: scaleX(1); opacity: 0; }
+  }
+
+  /* one orchestrated boot-in on page load: panels bracket in staggered while
+     the boot overlay's ring spins up. `backwards` fill keeps everything
+     hidden until its own delay. One-shot — never loops. */
+  @keyframes panelBoot {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes cornerBoot { from { opacity: 0; } to { opacity: .9; } }
+  .corner { animation: cornerBoot .5s ease-out .15s backwards; }
+  .readout { animation: panelBoot .6s ease-out .35s backwards; }
+  .mute-btn, .status-line { animation: panelBoot .6s ease-out .55s backwards; }
+  .stats { animation: panelBoot .6s ease-out .7s backwards; }
+  .cmd-panel, .left-stack, .right-rail { animation: panelBoot .6s ease-out .85s backwards; }
+  .feed { animation: panelBoot .7s ease-out 1s backwards; }
+
+  /* ---- comms replay control (08-24) ----
+     Pat is usually away from the screen while a line is spoken, so the feed is
+     where he finds it afterwards — but the text was all that survived, the
+     audio was gone. Every assistant line now carries a play control that
+     re-synthesises it through the SAME local kokoro voice it was spoken in
+     (POST /replay), because the personas are how he tells whose finding a
+     line was. Cyan-dim at rest, arc-reactor blue while active. Nothing here
+     is ever red: a replay that can't start is informational, not a failure. */
+  .line .who .right { display: flex; align-items: center; gap: .55rem; flex: 0 0 auto; }
+  .rp { display: inline-flex; align-items: center; gap: .28rem; }
+  .rp button {
+    font-family: var(--mono); font-size: .6rem; letter-spacing: .06em;
+    background: transparent; border: 1px solid var(--border);
+    color: var(--cyan-dim); padding: .02rem .32rem; cursor: pointer;
+    line-height: 1.5; transition: color .15s, border-color .15s;
+  }
+  .rp button:hover { color: var(--cyan); border-color: var(--cyan); }
+  /* the speed toggle belongs to whichever line is actually playing — one
+     persistent rate strip per line would be permanent clutter on a feed
+     that is mostly read, not replayed */
+  .rp .rp-rate { display: none; gap: .18rem; }
+  .line.replaying .rp .rp-rate { display: inline-flex; }
+  .line.replaying .rp .rp-btn,
+  .rp .rp-rate button.on { color: var(--cyan); border-color: var(--cyan); }
+  .line.replaying .rp .rp-btn { text-shadow: 0 0 8px var(--cyan-glow); }
+  .line.replaying { box-shadow: inset 0 0 24px rgba(79, 195, 247, .10); }
+  /* why a replay didn't start (quiet mode, a live turn, kokoro down) — the
+     same amber "attention, not failure" family as a gate rejection */
+  .rp .rp-note { color: var(--amber); font-size: .56rem; letter-spacing: .06em; }
+
+  /* ---- wake / directive acknowledgement (08-24) ----
+     Until now NOTHING on this page changed when a wake phrase was accepted,
+     so a healthy wake word was indistinguishable from a dead one — Pat has
+     reported it down while it was working, and repeats himself because he
+     cannot tell. This fires the moment a directive actually LANDS (POST
+     /inbox: wake phrase, typed, or dictated alike), in the arc-reactor idiom
+     already used for the boot-in — an expanding ring plus a whole-page blue
+     wash, sized to be caught peripherally from across the room, which is
+     where he is. Arc-reactor BLUE, never red: this is an acknowledgement.
+     VISUAL ONLY — both voicemode feedback tones are off deliberately
+     (VOICEMODE_AUDIO_FEEDBACK, VOICEMODE_SOUNDFONTS_ENABLED) and this adds
+     no sound of its own. */
+  #wakeAck {
+    position: fixed; inset: 0; z-index: 7; pointer-events: none;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; transition: opacity .3s ease;
+  }
+  #wakeAck.on { opacity: 1; box-shadow: inset 0 0 150px 22px var(--cyan-glow); }
+  .wa-core { position: relative; display: flex; flex-direction: column; align-items: center; gap: .55rem; }
+  .wa-ring {
+    position: absolute; top: 50%; left: 50%; width: 260px; height: 260px;
+    margin: -130px 0 0 -130px; border-radius: 50%;
+    border: 2px solid var(--cyan); box-shadow: 0 0 40px var(--cyan-glow);
+    opacity: 0;
+  }
+  #wakeAck.on .wa-ring { animation: wakering 1.1s ease-out; }
+  #wakeAck.on .wa-ring.two { animation-delay: .22s; }
+  @keyframes wakering {
+    0% { transform: scale(.3); opacity: .95; }
+    100% { transform: scale(1.9); opacity: 0; }
+  }
+  .wa-main {
+    font-size: 2.6rem; font-weight: 700; letter-spacing: .34em; text-indent: .34em;
+    color: var(--cyan); text-transform: uppercase;
+    text-shadow: 0 0 26px var(--cyan-glow); z-index: 1;
+  }
+  .wa-sub {
+    font-size: .72rem; letter-spacing: .22em; color: var(--white); opacity: .8;
+    text-transform: uppercase; max-width: 46ch; text-align: center;
+    line-height: 1.5; z-index: 1;
+  }
+  /* the screensaver dims panels; an acknowledgement it can't be seen through
+     would be no acknowledgement at all */
+  body.ambient #wakeAck.on { opacity: 1; }
+
+  /* reduced motion: every loop and flourish collapses to its end state; the
+     canvas side is gated separately in JS (REDUCED_MOTION freezes its clock).
+     The wake acknowledgement stays fully visible under this — it is shown and
+     hidden by a JS timeout, never by an animation ending, so collapsing the
+     ring flourish costs the flourish and not the signal. */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: .01ms !important;
+    }
+  }
+</style>
+</head>
+<body>
+
+<div id="tint"></div>
+<div id="feedToggle" title="toggle comms panel">⟩</div>
+<div id="boot"><div class="ring"></div><div class="label">Jarvis online</div></div>
+
+<div class="stage">
+  <canvas id="viz" width="1280" height="1280"></canvas>
+  <div class="corner tl"></div><div class="corner tr"></div>
+  <div class="corner bl"></div><div class="corner br"></div>
+  <div class="readout" id="ro-tl"><span class="wordmark">J.A.R.V.I.S.</span> <span class="dim">MK III</span><br>
+    <span class="dim">VOICE MODULE</span> <span id="roVoice">--</span><br>
+    <span class="dim">WAKE LISTENER</span> <span id="roListening">--</span></div>
+  <div class="readout" id="ro-tr"><span class="corner-name">Jarvis</span><br><span class="dim">STT</span> WHISPER LARGE-V3<br><span class="dim">TTS</span> KOKORO LOCAL</div>
+  <div class="readout" id="ro-bl"><span class="dim">MIC</span> <span id="roMic">--.- dB</span><br><span class="dim">UPTIME</span> <span id="roUp">00:00</span></div>
+  <div class="readout" id="ro-br"><span class="dim">LINK</span> LOCALHOST:8123<br><span class="dim">MODE</span> CONVERSE</div>
+  <button id="gearBtn" title="settings">⚙</button>
+  <div class="voices" id="voices">
+    <div class="vlabel">SETTINGS · VOICE</div>
+    <div class="roster" id="voiceRoster"></div>
+    <div class="vlabel">STYLE</div>
+    <div class="row" id="stylePicker">
+      <button data-style="reticle">Reticle</button>
+      <button data-style="orb">Orb</button>
+      <button data-style="pulse">Pulse</button>
+      <button data-style="reactor">Reactor</button>
+    </div>
+    <div class="vlabel">THEME</div>
+    <div class="row" id="themePicker">
+      <button data-theme="cyan">Cyan</button>
+      <button data-theme="gold">Gold</button>
+      <button data-theme="matrix">Matrix</button>
+      <button data-theme="violet">Violet</button>
+    </div>
+  </div>
+  <div class="cmd-panel" id="cmdPanel">
+    <div class="voices stacked">
+      <div class="vlabel">COMMANDS</div>
+      <div class="roster" id="cmdPicker">
+        <button data-cmd="cmd: etl-triage-propose" title="run etl triage (propose-only)">ETL Triage</button>
+        <button data-cmd="cmd: pr-fleet-sweep" title="pr fleet sweep">PR Sweep</button>
+        <button data-cmd="cmd: ticket-merge-state-audit" title="ticket/board audit">Board Audit</button>
+        <button data-cmd="cmd: epic-status" title="epic status">Epic Status</button>
+        <button data-cmd="cmd: babysit-prs" title="babysit my PRs">Babysit PRs</button>
+      </div>
+      <div class="cmd-note">runs via the session</div>
+    </div>
+  </div>
+  <div class="left-stack" id="leftStack">
+    <div class="voices stacked" id="plans" hidden><div class="vlabel">VISUAL PLANS</div></div>
+  </div>
+  <div class="right-rail" id="rightRail">
+    <div class="asana-widget" id="dueSoon" hidden><div class="vlabel">DUE / OVERDUE</div></div>
+    <div class="asana-widget" id="kanban" hidden><div class="vlabel">KANBAN</div></div>
+  <div class="ops" id="ops" hidden><div class="olabel">ACTIVE OPS</div></div>
+  <div class="spawn">
+    <select id="spawnModel"><option value="">model · default</option><option value="sonnet">sonnet</option><option value="opus">opus</option><option value="fable">fable</option></select>
+    <select id="spawnEffort"><option value="">effort · default</option><option value="low">low</option><option value="medium">medium</option><option value="high">high</option></select>
+    <button id="spawnBtn">+ session</button>
+  </div>
+  </div>
+  <button class="mute-btn" id="muteBtn" title="tap for quiet: no speech out, no listening in — text only">◉ LIVE — TAP FOR QUIET</button>
+  <button class="skip-btn" id="skipBtn" title="skip: cut the sentence being spoken and move on — does NOT mute">⏭ skip</button>
+  <div class="stats" id="stats">
+    <div><div class="n zero" id="stOps">0</div><div class="l">ops</div></div>
+    <div><div class="n zero" id="stPlans">0</div><div class="l">plans</div></div>
+    <div><div class="n zero" id="stTurns">0</div><div class="l">turns</div></div>
+    <div><div class="n" id="stClock">--:--</div><div class="l">local</div></div>
+  </div>
+  <div class="status-line" id="statusLine">listening — say "hey jarvis"</div>
+  <div id="muteBadge">
+    <div class="mb-main">Muted</div>
+    <div class="mb-sub" id="muteBadgeSub">mic off · text only</div>
+  </div>
+  <div id="ambientClock">--:--</div>
+  <div class="mic-gate" id="micGate"><span>Tap to initialize audio sensors</span></div>
+</div>
+
+<div id="wakeAck" aria-hidden="true">
+  <div class="wa-core">
+    <div class="wa-ring"></div><div class="wa-ring two"></div>
+    <div class="wa-main" id="wakeAckMain">Heard</div>
+    <div class="wa-sub" id="wakeAckSub"></div>
+  </div>
+</div>
+
+<aside class="feed">
+  <header><span class="tabs"><span id="tabComms" class="on">Comms</span><span id="tabWork">Work Log</span></span><span class="dim" id="feedCount">0 entries</span></header>
+  <div class="lines" id="lines"></div>
+  <div class="telemetry" id="telemetry">
+    <div class="cell"><div class="k">TTFA</div><div class="v" id="tTtfa">—</div></div>
+    <div class="cell"><div class="k">TTS</div><div class="v" id="tTts">—</div></div>
+    <div class="cell"><div class="k">REC</div><div class="v" id="tRec">—</div></div>
+    <div class="cell"><div class="k">STT</div><div class="v" id="tStt">—</div></div>
+    <div class="cell"><div class="k">Turns</div><div class="v" id="tTurns">—</div></div>
+  </div>
+  <div class="inbox">
+    <div class="mic-transcript" id="micTranscript" hidden></div>
+    <div class="inbox-row">
+      <input id="inboxInput" placeholder="message jarvis…" autocomplete="off" spellcheck="false">
+      <button id="inboxMic" title="push-to-talk dictation">🎙</button>
+    </div>
+  </div>
+</aside>
+
+<script>
+const canvas = document.getElementById('viz');
+const ctx = canvas.getContext('2d');
+const statusLine = document.getElementById('statusLine');
+const linesEl = document.getElementById('lines');
+const feedCount = document.getElementById('feedCount');
+const micGate = document.getElementById('micGate');
+const voiceRosterEl = document.getElementById('voiceRoster');
+const muteBtn = document.getElementById('muteBtn');
+const opsEl = document.getElementById('ops');
+const tintEl = document.getElementById('tint');
+const bootEl = document.getElementById('boot');
+const muteBadgeSub = document.getElementById('muteBadgeSub');
+let prevStandby = null, currentTasks = [];
+let opFlash = {}, prevOpStatuses = {}, lastBusyAt = performance.now();
+const escT = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+bootEl.addEventListener('animationend', e => { if (e.target === bootEl) bootEl.classList.remove('run'); });
+const roMic = document.getElementById('roMic');
+const roUp = document.getElementById('roUp');
+const roVoice = document.getElementById('roVoice');
+const roListening = document.getElementById('roListening');
+
+const W = 1280, C = W / 2;
+
+/* ---- theme palettes: canvas + CSS custom props both read from these ---- */
+/* red is the SAME hot-rod value in every theme — the alert family is unified
+   and never restyled by a theme switch (JARVIS pass, 08-19). The 'cyan'
+   theme name is kept for localStorage compatibility; its values are now the
+   arc-reactor blue default. */
+const THEMES = {
+  cyan: {
+    name: 'cyan', bg: '#02060f', bg2: '#061a2e',
+    accent: '#4fc3f7', accentDim: '#2d6d8f', accentGlow: 'rgba(79,195,247,.55)',
+    activeGlow: 'rgba(79,195,247,.25)', dim: 'rgba(79,195,247,.35)',
+    line: 'rgba(79,195,247,.2)', panel: 'rgba(6,18,31,.72)',
+    white: '#e8f6ff', red: '#ff3b30', amber: '#ffc46b', border: 'rgba(45,109,143,.55)',
+  },
+  gold: {
+    name: 'gold', bg: '#120b02', bg2: '#1c1204',
+    accent: '#ffc266', accentDim: '#7a5a26', accentGlow: 'rgba(255,194,102,.55)',
+    activeGlow: 'rgba(255,194,102,.25)', dim: 'rgba(255,194,102,.35)',
+    line: 'rgba(255,194,102,.22)', panel: 'rgba(28,18,4,.72)',
+    white: '#fff3e0', red: '#ff3b30', amber: '#ff8a3d', border: 'rgba(122,90,38,.55)',
+  },
+  matrix: {
+    name: 'matrix', bg: '#020d05', bg2: '#04170b',
+    accent: '#5dffa0', accentDim: '#245c39', accentGlow: 'rgba(93,255,160,.55)',
+    activeGlow: 'rgba(93,255,160,.25)', dim: 'rgba(93,255,160,.35)',
+    line: 'rgba(93,255,160,.22)', panel: 'rgba(4,22,12,.72)',
+    white: '#eafff0', red: '#ff3b30', amber: '#ffc46b', border: 'rgba(36,92,57,.55)',
+  },
+  violet: {
+    name: 'violet', bg: '#0c0416', bg2: '#170a28',
+    accent: '#c98bff', accentDim: '#5a3378', accentGlow: 'rgba(201,139,255,.55)',
+    activeGlow: 'rgba(201,139,255,.25)', dim: 'rgba(201,139,255,.35)',
+    line: 'rgba(201,139,255,.22)', panel: 'rgba(20,8,32,.72)',
+    white: '#f5eaff', red: '#ff3b30', amber: '#ffc46b', border: 'rgba(90,51,120,.55)',
+  },
+};
+const CORE_STYLES = ['reticle', 'orb', 'pulse', 'reactor'];
+const hexToRGB = hex => {
+  const n = parseInt(hex.slice(1), 16);
+  return `${(n >> 16) & 255},${(n >> 8) & 255},${n & 255}`;
+};
+let theme = THEMES.cyan;
+let themeRGB = { accent: hexToRGB(theme.accent), white: hexToRGB(theme.white) };
+let coreStyle = 'reticle';
+
+let analyser = null, freq = null, wave = null;
+const t0 = performance.now();
+
+/* JARVIS pass (08-19): the canvas runs off an integrated animation clock
+   instead of raw wall time, so the motion tiers actually change what the
+   instruments DO — calm slows every rotation to an ambient drift, active
+   runs full speed, and prefers-reduced-motion freezes the clock entirely
+   (a static instrument, still fully readable). Integrating (rather than
+   scaling t directly) means a tier change eases the speed without any ring
+   jumping position. */
+const REDUCED_MOTION = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
+let animT = 0, lastFrameTs = null, vizTier = 'active';
+const GOLD_RGB = '227,192,122';  // matches --gold; theme-independent trim
+/* MUTED (08-19): hudMuted is Pat's INTENT (the /mute flag — what he clicked);
+   hudCapturePaused is the DAEMON'S REALITY (heartbeat mode === 'paused', via
+   state.json listening.mode). They are kept apart on purpose, the same
+   verified-vs-assumed discipline as ORPHANED/DEGRADED elsewhere on this page:
+   the badge states the intent and its sub-line reports whether the daemon has
+   actually stopped capturing, so a disagreement between the two is visible
+   instead of papered over. */
+let hudMuted = false, hudCapturePaused = false;
+const MUTE_RGB = '121,131,158';  // matches --mute; theme-independent
+
+const stClock = document.getElementById('stClock');
+const ambientClock = document.getElementById('ambientClock');
+setInterval(() => {
+  const s = Math.floor((performance.now() - t0) / 1000);
+  roUp.textContent = String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+  const d = new Date();
+  const hhmm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  stClock.textContent = hhmm;
+  ambientClock.textContent = hhmm;
+}, 1000);
+
+/* burn-in drift: shift the whole page a couple px per minute while ambient */
+let driftPhase = 0;
+setInterval(() => {
+  driftPhase = (driftPhase + 1) % 4;
+  document.body.style.transform = document.body.classList.contains('ambient')
+    ? `translate(${[0, 2, 0, -2][driftPhase]}px, ${[2, 0, -2, 0][driftPhase]}px)`
+    : '';
+}, 60000);
+
+/* ambient screensaver exit (08-18): the screensaver used to be inescapable —
+   lastBusyAt was only ever reset by SYSTEM business (`if (!free) lastBusyAt =
+   ...` in poll()), and nothing on the page listened for user input, so once
+   ambient engaged the only way out was a refresh (which reinitializes
+   lastBusyAt). Exit now on ANY user input, and re-arm the idle timer by
+   resetting lastBusyAt so ambient returns after another 5 quiet minutes.
+   poll() additionally wakes on NEW comms/inbox activity (see there) so the
+   wake word — which lands as a POST /inbox directive, changing no status —
+   literally wakes the screen. */
+function wakeFromAmbient() {
+  lastBusyAt = performance.now();
+  if (document.body.classList.contains('ambient')) {
+    document.body.classList.remove('ambient');
+    document.body.style.transform = '';  // undo burn-in drift immediately
+  }
+}
+let lastMoveWakeAt = 0;
+window.addEventListener('pointerdown', wakeFromAmbient);
+window.addEventListener('keydown', wakeFromAmbient);
+window.addEventListener('touchstart', wakeFromAmbient, { passive: true });
+window.addEventListener('pointermove', () => {   // debounced — fires in bursts
+  const now = performance.now();
+  if (now - lastMoveWakeAt > 250) { lastMoveWakeAt = now; wakeFromAmbient(); }
+});
+
+/* shared mic flow — the visualizer's mic-gate and push-to-talk dictation both
+   route through here so dictation reuses the SAME getUserMedia grant/stream
+   instead of prompting twice.
+
+   Self-healing (Pat, 08-17): a device disappearing out from under an open
+   getUserMedia stream — Bluetooth earbuds dropping, same as the Python
+   daemon's failure mode — kills the MediaStreamTrack. Left alone, analyser
+   and the last captured frame just sit there: the reticle looks alive, the
+   dB readout shows a stale number, and only a manual refresh fixes it. So:
+   track 'ended' (plus a cheap readyState check on the animation loop's
+   already-running tick, and devicechange as the primary trigger) tears the
+   dead analyser down immediately — draw()'s existing "no analyser" branch
+   already renders the calm idle animation instead of a frozen waveform —
+   and schedules a backoff retry of getUserMedia, which the browser answers
+   silently (no re-prompt) once a new default device exists. Gives up after
+   MIC_MAX_AUTO_RETRIES and re-shows the gate rather than retrying forever. */
+let micStream = null;
+let micState = 'gate';  // 'gate' | 'live' | 'lost' — drives the honest-dB label
+let micRetryTimer = null;
+let micRetryAttempt = 0;
+const MIC_RETRY_BACKOFF_MS = [500, 1000, 2000, 4000, 8000];
+const MIC_MAX_AUTO_RETRIES = 5;
+
+function micTrackAlive() {
+  return !!micStream && micStream.getAudioTracks().some(t => t.readyState === 'live');
+}
+
+function teardownMicNodes() {
+  analyser = null;
+  freq = null;
+  wave = null;
+}
+
+async function ensureMic() {
+  if (micTrackAlive()) return micStream;
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const ac = new AudioContext();
+  const src = ac.createMediaStreamSource(stream);
+  analyser = ac.createAnalyser();
+  analyser.fftSize = 512;
+  analyser.smoothingTimeConstant = 0.78;
+  src.connect(analyser);
+  freq = new Uint8Array(analyser.frequencyBinCount);
+  wave = new Uint8Array(analyser.fftSize);
+  micGate.classList.add('hidden');
+  micStream = stream;
+  micState = 'live';
+  micRetryAttempt = 0;
+  if (micRetryTimer) { clearTimeout(micRetryTimer); micRetryTimer = null; }
+  stream.getAudioTracks().forEach(t => t.addEventListener('ended', handleMicDeath));
+  return stream;
+}
+
+function showMicGate(message) {
+  micGate.classList.remove('hidden');
+  micGate.querySelector('span').textContent = message;
+}
+
+function handleMicDeath() {
+  if (micState === 'gate') return;  // never granted yet — nothing to recover
+  teardownMicNodes();
+  micStream = null;
+  micState = 'lost';
+  scheduleMicRetry();
+}
+
+function scheduleMicRetry() {
+  if (micRetryTimer) return;
+  if (micRetryAttempt >= MIC_MAX_AUTO_RETRIES) {
+    showMicGate('mic lost — tap to reconnect');
+    return;
+  }
+  const delay = MIC_RETRY_BACKOFF_MS[Math.min(micRetryAttempt, MIC_RETRY_BACKOFF_MS.length - 1)];
+  micRetryTimer = setTimeout(async () => {
+    micRetryTimer = null;
+    micRetryAttempt++;
+    try {
+      await ensureMic();
+    } catch (e) {
+      scheduleMicRetry();
+    }
+  }, delay);
+}
+
+if (navigator.mediaDevices.addEventListener) {
+  navigator.mediaDevices.addEventListener('devicechange', () => {
+    if (micState !== 'gate' && !micTrackAlive()) handleMicDeath();
+  });
+}
+
+micGate.addEventListener('click', async () => {
+  try {
+    await ensureMic();
+  } catch (e) {
+    micGate.querySelector('span').textContent = 'SENSOR FAULT: ' + e.message;
+  }
+});
+
+function ring(r, w, color, alpha, dash, rot) {
+  ctx.save();
+  ctx.translate(C, C); ctx.rotate(rot || 0);
+  ctx.globalAlpha = alpha; ctx.strokeStyle = color; ctx.lineWidth = w;
+  ctx.setLineDash(dash || []);
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}
+
+function ticks(r, n, len, w, alpha, rot, color) {
+  ctx.save();
+  ctx.translate(C, C); ctx.rotate(rot || 0);
+  ctx.strokeStyle = color; ctx.globalAlpha = alpha; ctx.lineWidth = w;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    const L = i % 5 === 0 ? len * 1.8 : len;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+    ctx.lineTo(Math.cos(a) * (r + L), Math.sin(a) * (r + L));
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/* small angular readout labels — bearing numerals every 30° around the outer
+   gauge, tangentially rotated (the film-HUD instrument look). 12 tiny text
+   draws per frame: negligible. */
+function gaugeLabels(r, alpha, color) {
+  ctx.save();
+  ctx.translate(C, C);
+  ctx.font = '17px monospace';
+  ctx.fillStyle = color; ctx.globalAlpha = alpha;
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (let d = 0; d < 360; d += 30) {
+    const a = (d * Math.PI / 180) - Math.PI / 2;
+    ctx.save();
+    ctx.translate(Math.cos(a) * r, Math.sin(a) * r);
+    ctx.rotate(a + Math.PI / 2);
+    ctx.fillText(String(d).padStart(3, '0'), 0, 0);
+    ctx.restore();
+  }
+  ctx.restore();
+}
+
+/* ---- core styles: each renders ONLY the central node, reacting to `avg` ---- */
+function drawReticle(ctx, t, avg) {
+  /* layered holographic gauge (JARVIS pass): thin concentric rings at
+     different speeds with a cheap two-pass glow (wide faint stroke under a
+     crisp one — no shadowBlur, which is the expensive way), gold bearing
+     numerals, and a tier-aware accent: the outermost ring goes hot-rod red
+     only in the alert tier. */
+  const holo = hudMuted ? 'rgb(121,131,158)' : vizTier === 'alert' ? theme.red : theme.accent;
+  const glowF = vizTier === 'calm' ? .7 : 1;
+  ring(596, 1, holo, .1 * glowF, [1, 7], -t * .04);
+  gaugeLabels(582, .3 * glowF, `rgb(${GOLD_RGB})`);
+  ring(560, 5, holo, .06 * glowF);            /* glow pass */
+  ring(560, 1, holo, .28 * glowF);
+  ticks(560, 90, 8, 1, .3 * glowF, 0, theme.accent);
+  ring(538, 1, theme.accent, .1 * glowF, [30, 46], t * .06);
+  ring(505, 1, theme.accent, .18, [2, 10], t * .15);
+  ring(430, 4, theme.accent, .08 * glowF, [60, 24], t * .3);  /* glow pass */
+  ring(430, 2, theme.accent, .35, [60, 24], t * .3);
+  ring(430, 2, theme.accent, .2, [16, 30], -t * .22);
+  ticks(400, 60, 6, 1, .25, -t * .1, theme.accent);
+  ring(330, 1, theme.accent, .3);
+
+  /* ---- arc-reactor core (08-19 round 2, Pat: "make it cooler") ----
+     Layered instrument center, all inside the 120-bar ring (base r=250):
+       - depth glow: one wide faint radial behind everything central
+       - fine tick ring (r=232) whose highlighted bearing TRACKS the radar
+         sweep (same beam formula as draw()'s sweep, so they stay locked)
+       - slow counter-rotating segmented coil ring (r=205)
+       - inner pulsing heartbeat ring, tied to the tier: calm inherits the
+         slowed clock, alert pulses harder AND goes hot-rod red — the whole
+         core (rings + glow) flips red in alert so it's unmistakable from
+         across the room. Cost: ~8 strokes + 1 gradient per frame, no
+         shadowBlur; REDUCED_MOTION freezes it via the shared clock. */
+  // muted outranks the tier: a powered-down core must never wear the alert
+  // red or the live blue (alert still owns red whenever we're NOT muted)
+  const coreAlert = vizTier === 'alert' && !hudMuted;
+  const coreCol = hudMuted ? 'rgb(121,131,158)' : coreAlert ? theme.red : theme.accent;
+  const coreRGB = hudMuted ? MUTE_RGB : coreAlert ? '255,59,48' : themeRGB.accent;
+  const coreBeamA = ((t / 8) * Math.PI * 2) % (Math.PI * 2);
+  const dg = ctx.createRadialGradient(C, C, 40, C, C, 300);
+  dg.addColorStop(0, `rgba(${coreRGB},.1)`);
+  dg.addColorStop(1, `rgba(${coreRGB},0)`);
+  ctx.fillStyle = dg;
+  ctx.beginPath(); ctx.arc(C, C, 300, 0, Math.PI * 2); ctx.fill();
+  ticks(232, 120, 4, 1, .18, 0, coreCol);
+  ctx.save(); ctx.translate(C, C);
+  ctx.strokeStyle = coreCol; ctx.lineCap = 'round';
+  ctx.globalAlpha = .25; ctx.lineWidth = 7;
+  ctx.beginPath(); ctx.arc(0, 0, 234, coreBeamA - .12, coreBeamA + .12); ctx.stroke();
+  ctx.globalAlpha = .85; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(0, 0, 234, coreBeamA - .07, coreBeamA + .07); ctx.stroke();
+  ctx.rotate(-t * .12);
+  ctx.globalAlpha = .3; ctx.lineWidth = 5; ctx.setLineDash([26, 22]);
+  ctx.beginPath(); ctx.arc(0, 0, 205, 0, Math.PI * 2); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+  // frozen mid-breath while muted — the heartbeat ring is the single most
+  // "it's listening" cue on the whole page
+  const corePulse = hudMuted ? .5 : .5 + .5 * Math.sin(t * (coreAlert ? 5 : 2.2));
+  ring(128 + corePulse * 8, 5, coreCol, .08 + corePulse * .1);
+  ring(128 + corePulse * 8, 1.5, coreCol, (coreAlert ? .5 : .3) + corePulse * (coreAlert ? .45 : .25));
+
+  const N = 120;
+  ctx.save(); ctx.translate(C, C);
+  for (let i = 0; i < N; i++) {
+    const v = analyser ? freq[Math.floor(i * freq.length / N * .7)] / 255
+                       : avg * (0.6 + 0.4 * Math.sin(t * 2 + i * .4));
+    const a = (i / N) * Math.PI * 2 - Math.PI / 2;
+    const r0 = 250, len = 6 + v * 120;
+    const g = ctx.createLinearGradient(Math.cos(a) * r0, Math.sin(a) * r0,
+                                       Math.cos(a) * (r0 + len), Math.sin(a) * (r0 + len));
+    g.addColorStop(0, `rgba(${themeRGB.accent},.8)`);
+    g.addColorStop(1, `rgba(${themeRGB.accent},0)`);
+    ctx.strokeStyle = g; ctx.lineWidth = 5; ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * r0, Math.sin(a) * r0);
+    ctx.lineTo(Math.cos(a) * (r0 + len), Math.sin(a) * (r0 + len));
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  const coreR = 90 + avg * 120;
+  const cg = ctx.createRadialGradient(C, C, 0, C, C, coreR);
+  cg.addColorStop(0, `rgba(${themeRGB.white},.95)`);
+  cg.addColorStop(.35, `rgba(${coreRGB},.5)`);
+  cg.addColorStop(1, `rgba(${coreRGB},0)`);
+  ctx.fillStyle = cg;
+  ctx.beginPath(); ctx.arc(C, C, coreR, 0, Math.PI * 2); ctx.fill();
+}
+
+/* particle sphere: fixed fibonacci distribution, rotated live around Y */
+const ORB_N = 250;
+const orbPts = Array.from({ length: ORB_N }, (_, i) => {
+  const phi = Math.acos(1 - 2 * (i + 0.5) / ORB_N);
+  const th = Math.PI * (1 + Math.sqrt(5)) * i;
+  return { x: Math.sin(phi) * Math.cos(th), y: Math.sin(phi) * Math.sin(th), z: Math.cos(phi) };
+});
+function drawOrb(ctx, t, avg) {
+  const R = 220 + avg * 40;
+  const spin = t * (0.15 + avg * 0.5);
+  const cosA = Math.cos(spin), sinA = Math.sin(spin);
+  const level = avg > 0.02 ? avg : 0.04;
+  ctx.save(); ctx.translate(C, C);
+  orbPts.forEach((p, i) => {
+    const x = p.x * cosA + p.z * sinA;
+    const z = -p.x * sinA + p.z * cosA;
+    const persp = 260 / (260 - z * R * 0.5);
+    const px = x * R * persp, py = p.y * R * persp;
+    const depth = (z + 1) / 2;
+    const jitter = 0.4 + 0.6 * Math.sin(t * 3 + i);
+    const alpha = Math.min((0.15 + depth * 0.6) * (0.6 + 0.4 * level * jitter), 1);
+    const size = (0.6 + depth * 1.6) * (1 + level * 2.2);
+    ctx.fillStyle = `rgba(${themeRGB.accent},${alpha})`;
+    ctx.beginPath(); ctx.arc(px, py, size, 0, Math.PI * 2); ctx.fill();
+  });
+  const coreR = 26 + avg * 50;
+  const cg = ctx.createRadialGradient(0, 0, 0, 0, 0, coreR);
+  cg.addColorStop(0, `rgba(${themeRGB.white},.9)`);
+  cg.addColorStop(1, `rgba(${themeRGB.accent},0)`);
+  ctx.fillStyle = cg;
+  ctx.beginPath(); ctx.arc(0, 0, coreR, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+/* minimal calm core: one breathing glow + one thin amplitude ring */
+function drawPulse(ctx, t, avg) {
+  const breathe = 0.5 + 0.5 * Math.sin(t * 0.6);
+  const level = avg > 0.02 ? avg : 0;
+  ctx.save(); ctx.translate(C, C);
+  const glowR = 130 + breathe * 30 + level * 90;
+  const cg = ctx.createRadialGradient(0, 0, 0, 0, 0, glowR);
+  cg.addColorStop(0, `rgba(${themeRGB.white},${.5 + level * .4})`);
+  cg.addColorStop(.4, `rgba(${themeRGB.accent},${.28 + level * .25})`);
+  cg.addColorStop(1, `rgba(${themeRGB.accent},0)`);
+  ctx.fillStyle = cg;
+  ctx.beginPath(); ctx.arc(0, 0, glowR, 0, Math.PI * 2); ctx.fill();
+
+  ctx.strokeStyle = theme.accent;
+  ctx.globalAlpha = .4 + level * .5;
+  ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.arc(0, 0, 90 + level * 130, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}
+
+/* arc-reactor: tight rings + shimmering spokes + white-hot center */
+function drawReactor(ctx, t, avg) {
+  const level = avg > 0.02 ? avg : 0.03;
+  ctx.save(); ctx.translate(C, C);
+
+  [60, 80, 100, 122].forEach((r, i) => {
+    ctx.globalAlpha = .5 - i * .08;
+    ctx.strokeStyle = theme.accent;
+    ctx.lineWidth = i === 3 ? 2.5 : 1.2;
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
+  });
+
+  const spokes = 16;
+  for (let i = 0; i < spokes; i++) {
+    const a = (i / spokes) * Math.PI * 2 + t * .1;
+    const flicker = 0.4 + 0.6 * Math.abs(Math.sin(t * 9 + i * 2.3)) * (0.3 + level * 1.4);
+    ctx.globalAlpha = Math.min(flicker, 1);
+    ctx.strokeStyle = theme.accent;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * 34, Math.sin(a) * 34);
+    ctx.lineTo(Math.cos(a) * (122 + level * 20), Math.sin(a) * (122 + level * 20));
+    ctx.stroke();
+  }
+
+  const hotR = 16 + level * 22;
+  const cg = ctx.createRadialGradient(0, 0, 0, 0, 0, hotR);
+  cg.addColorStop(0, `rgba(${themeRGB.white},1)`);
+  cg.addColorStop(.5, `rgba(${themeRGB.white},.6)`);
+  cg.addColorStop(1, `rgba(${themeRGB.accent},0)`);
+  ctx.fillStyle = cg;
+  ctx.beginPath(); ctx.arc(0, 0, hotR, 0, Math.PI * 2); ctx.fill();
+
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+function drawCore(style, ctx, t, avg) {
+  if (style === 'orb') return drawOrb(ctx, t, avg);
+  else if (style === 'pulse') return drawPulse(ctx, t, avg);
+  else if (style === 'reactor') return drawReactor(ctx, t, avg);
+  else return drawReticle(ctx, t, avg);
+}
+
+function draw(now) {
+  const frameDt = lastFrameTs === null ? 16 : Math.min(now - lastFrameTs, 100);
+  lastFrameTs = now;
+  vizTier = document.body.classList.contains('alert') ? 'alert'
+          : document.body.classList.contains('calm') ? 'calm' : 'active';
+  const vizSpd = REDUCED_MOTION ? 0 : vizTier === 'calm' ? 0.35 : 1;
+  animT += (frameDt / 1000) * vizSpd;
+  const t = animT;
+  ctx.clearRect(0, 0, W, W);
+
+  // Cheap backup detection alongside the track's 'ended' event and
+  // devicechange: this loop already runs every frame, so checking
+  // readyState here is nearly free and catches anything the event missed.
+  if (analyser && !micTrackAlive()) handleMicDeath();
+
+  let avg = 0;
+  if (hudMuted) {
+    // Hard zero, NOT the live analyser value: the browser mic stream (like
+    // the daemon's) stays open while muted, so its numbers keep moving and
+    // that movement is exactly what read as "still listening".
+    avg = 0;
+    roMic.textContent = 'MIC OFF';
+  } else if (analyser) {
+    analyser.getByteFrequencyData(freq);
+    analyser.getByteTimeDomainData(wave);
+    avg = freq.reduce((a, b) => a + b, 0) / freq.length / 255;
+    const db = avg > 0 ? (20 * Math.log10(Math.max(avg, 1e-4))).toFixed(1) : '--.-';
+    roMic.textContent = db + ' dB';
+  } else {
+    // Idle animation only — NEVER the last live reading, so a dead stream
+    // can't sit there looking like it's still capturing (the failure mode
+    // this replaced): honest about which kind of idle it is.
+    avg = 0.05 + 0.03 * Math.sin(t * 1.8);
+    roMic.textContent = micState === 'lost' ? 'mic lost' : '--.- dB';
+  }
+
+  drawCore(coreStyle, ctx, t, avg);
+
+  /* radar sweep — beam over the reticle; blips flare as it passes. JARVIS
+     pass: always on (a scanner scans), faint when there are no contacts,
+     brighter when ops are live; speed follows the tier via the animation
+     clock (calm = ambient drift, active = full sweep). Theme-aware colors
+     instead of the old hardcoded cyan. */
+  const beamA = ((t / 8) * Math.PI * 2) % (Math.PI * 2);
+  if (ctx.createConicGradient && !hudMuted) {
+    const beamPeak = currentTasks.length ? .12 : .05;
+    ctx.save(); ctx.translate(C, C);
+    const beam = ctx.createConicGradient(beamA, 0, 0);
+    beam.addColorStop(0, `rgba(${themeRGB.accent},${beamPeak})`);
+    beam.addColorStop(.09, `rgba(${themeRGB.accent},0)`);
+    beam.addColorStop(1, `rgba(${themeRGB.accent},0)`);
+    ctx.fillStyle = beam;
+    ctx.beginPath(); ctx.arc(0, 0, 560, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  /* agent constellation — one satellite per op, orbiting the reticle */
+  if (currentTasks.length) {
+    ring(310, 1, theme.accent, .14, [3, 14], t * .05);
+    currentTasks.forEach((task, i) => {
+      const a = t * .12 + (i / currentTasks.length) * Math.PI * 2;
+      const x = C + Math.cos(a) * 310, y = C + Math.sin(a) * 310;
+      const beamDiff = ((beamA - a) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2);
+      const flare = beamDiff < .25 ? 1 + (0.25 - beamDiff) * 3.2 : 1;
+      const pulse = (task.status === 'running' ? .55 + .45 * Math.sin(t * 4 + i) : 1) * Math.min(flare, 1.8);
+      const color = task.status === 'running' ? '255,196,107'
+                  : task.status === 'failed' ? '255,59,48'
+                  : task.status === 'done' ? themeRGB.accent : '92,111,128';
+      const glowR = 26 * (flare > 1 ? 1.5 : 1);
+      const g2 = ctx.createRadialGradient(x, y, 0, x, y, glowR);
+      g2.addColorStop(0, `rgba(${color},${Math.min(.9 * pulse, 1)})`);
+      g2.addColorStop(1, `rgba(${color},0)`);
+      ctx.fillStyle = g2;
+      ctx.beginPath(); ctx.arc(x, y, glowR, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = `rgba(${color},${Math.min(pulse, 1)})`;
+      ctx.beginPath(); ctx.arc(x, y, 7, 0, Math.PI * 2); ctx.fill();
+      ctx.font = '19px monospace';
+      ctx.fillStyle = `rgba(${color},.85)`;
+      ctx.textAlign = x > C ? 'left' : 'right';
+      ctx.fillText((task.label || '').slice(0, 30), x + (x > C ? 16 : -16), y + 5);
+    });
+  }
+
+  /* progress arcs — one rotating indeterminate arc per running op, stacked
+     outward. JARVIS pass: layered gauge treatment — a faint full track plus
+     a dashed twin ring, a wide soft glow pass under the crisp arc (cheap
+     two-stroke glow, no shadowBlur), and a thin counter-arc opposite the
+     main one. Still amber: running is the working-state family. */
+  currentTasks.filter(k => k.status === 'running').slice(0, 5).forEach((task, i) => {
+    const r = 352 + i * 15;
+    const start = t * (1.1 + i * .13) + i * 2.1;
+    ctx.save(); ctx.translate(C, C);
+    ctx.strokeStyle = 'rgba(255,196,107,1)'; ctx.lineCap = 'round';
+    ctx.globalAlpha = .13; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.globalAlpha = .07; ctx.setLineDash([2, 9]);
+    ctx.beginPath(); ctx.arc(0, 0, r + 5, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = 'rgba(255,196,107,.16)'; ctx.lineWidth = 9;
+    ctx.beginPath(); ctx.arc(0, 0, r, start, start + Math.PI / 2); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,196,107,.6)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.arc(0, 0, r, start, start + Math.PI / 2); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,196,107,.3)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(0, 0, r, start + Math.PI, start + Math.PI + Math.PI / 5); ctx.stroke();
+    ctx.restore();
+  });
+  /* completion flash — three full-ring blinks when an op finishes */
+  Object.entries(opFlash).forEach(([id, until]) => {
+    if (now > until) { delete opFlash[id]; return; }
+    const alpha = Math.abs(Math.sin((until - now) / 1200 * Math.PI * 3)) * .7;
+    ctx.save(); ctx.translate(C, C);
+    ctx.strokeStyle = `rgba(${themeRGB.accent},${alpha})`; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.arc(0, 0, 352, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  });
+
+  ctx.strokeStyle = theme.dim; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(C - 640, C); ctx.lineTo(C - 590, C);
+  ctx.moveTo(C + 590, C); ctx.lineTo(C + 640, C);
+  ctx.moveTo(C, C - 640); ctx.lineTo(C, C - 590);
+  ctx.moveTo(C, C + 590); ctx.lineTo(C, C + 640);
+  ctx.stroke();
+
+  if (hudMuted) {
+    // flat trace — the bouncing waveform was the loudest lie on the page
+    ctx.save();
+    ctx.strokeStyle = `rgba(${MUTE_RGB},.55)`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(C - 180, C); ctx.lineTo(C + 180, C);
+    ctx.stroke();
+    ctx.restore();
+  } else if (analyser) {
+    ctx.save();
+    ctx.strokeStyle = `rgba(${themeRGB.white},.9)`;
+    ctx.shadowColor = theme.accent; ctx.shadowBlur = 12; ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    const span = 360, y0 = C;
+    for (let i = 0; i < wave.length; i += 4) {
+      const x = C - span / 2 + (i / wave.length) * span;
+      const y = y0 + ((wave[i] - 128) / 128) * 90;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  requestAnimationFrame(draw);
+}
+requestAnimationFrame(draw);
+
+/* ---- voice switcher ---- */
+let rosterBuilt = false, activeVoice = '', requestedVoice = null;
+function buildRoster(roster) {
+  roster.forEach(v => {
+    const b = document.createElement('button');
+    b.textContent = v.replace(/^[ab][fm]_/, m => m.toUpperCase());
+    b.dataset.voice = v;
+    b.addEventListener('click', async () => {
+      await fetch('/voice', { method: 'POST', body: JSON.stringify({ voice: v }) });
+      requestedVoice = v;
+      paintRoster();
+    });
+    voiceRosterEl.appendChild(b);
+  });
+  rosterBuilt = true;
+}
+function paintRoster() {
+  voiceRosterEl.querySelectorAll('button').forEach(b => {
+    b.className =
+      b.dataset.voice === activeVoice ? 'active'
+      : b.dataset.voice === requestedVoice ? 'pending'
+      : '';
+  });
+}
+
+/* ---- spawn second session (two-step confirm, no modal) ---- */
+const spawnBtn = document.getElementById('spawnBtn');
+let spawnArmTimer = null;
+spawnBtn.addEventListener('click', async () => {
+  if (!spawnBtn.classList.contains('armed')) {
+    spawnBtn.classList.add('armed');
+    spawnBtn.textContent = 'confirm spawn?';
+    spawnArmTimer = setTimeout(() => {
+      spawnBtn.classList.remove('armed');
+      spawnBtn.textContent = '+ session';
+    }, 3000);
+    return;
+  }
+  clearTimeout(spawnArmTimer);
+  spawnBtn.classList.remove('armed');
+  const r = await (await fetch('/spawn', { method: 'POST', body: JSON.stringify({
+    model: document.getElementById('spawnModel').value || null,
+    effort: document.getElementById('spawnEffort').value || null,
+  }) })).json();
+  spawnBtn.textContent = r.ok ? 'spawned ✓' : 'wait…';
+  setTimeout(() => { spawnBtn.textContent = '+ session'; }, 2000);
+});
+
+/* ---- settings gear ---- */
+document.getElementById('gearBtn').addEventListener('click', () => {
+  document.body.classList.toggle('settings-open');
+});
+
+/* ---- style + theme audition: instant, no reload, persisted in localStorage ---- */
+const stylePicker = document.getElementById('stylePicker');
+const themePicker = document.getElementById('themePicker');
+function paintPickers() {
+  stylePicker.querySelectorAll('button').forEach(b => {
+    b.className = b.dataset.style === coreStyle ? 'active' : '';
+  });
+  themePicker.querySelectorAll('button').forEach(b => {
+    b.className = b.dataset.theme === theme.name ? 'active' : '';
+  });
+}
+function applyCoreStyle(style) {
+  coreStyle = CORE_STYLES.includes(style) ? style : 'reticle';
+  localStorage.setItem('hud-style', coreStyle);
+  paintPickers();
+}
+function applyTheme(name) {
+  theme = THEMES[name] || THEMES.cyan;
+  themeRGB = { accent: hexToRGB(theme.accent), white: hexToRGB(theme.white) };
+  const root = document.documentElement.style;
+  root.setProperty('--bg', theme.bg);
+  root.setProperty('--bg2', theme.bg2);
+  root.setProperty('--cyan', theme.accent);
+  root.setProperty('--cyan-dim', theme.accentDim);
+  root.setProperty('--cyan-glow', theme.accentGlow);
+  root.setProperty('--active-glow', theme.activeGlow);
+  root.setProperty('--white', theme.white);
+  root.setProperty('--red', theme.red);
+  root.setProperty('--amber', theme.amber);
+  root.setProperty('--panel', theme.panel);
+  root.setProperty('--line', theme.line);
+  root.setProperty('--border', theme.border);
+  localStorage.setItem('hud-theme', theme.name);
+  paintPickers();
+}
+stylePicker.querySelectorAll('button').forEach(b => b.addEventListener('click', () => applyCoreStyle(b.dataset.style)));
+themePicker.querySelectorAll('button').forEach(b => b.addEventListener('click', () => applyTheme(b.dataset.theme)));
+/* JARVIS pass one-time migration (08-19): the rebrand's arc-reactor blue is
+   the commissioned look, so a theme saved BEFORE the pass is cleared exactly
+   once and the new default lands. The picker itself stays fully functional —
+   any theme chosen after this keeps persisting like always. */
+if (!localStorage.getItem('hud-jarvis-pass')) {
+  localStorage.setItem('hud-jarvis-pass', '1');
+  localStorage.removeItem('hud-theme');
+}
+applyCoreStyle(localStorage.getItem('hud-style') || 'reticle');
+applyTheme(localStorage.getItem('hud-theme') || 'cyan');
+
+/* one orchestrated boot-up moment on page load (JARVIS pass): ring spin-up
+   overlay + the CSS panel bracket-in stagger, then never again — the only
+   other trigger stays the standby-exit re-boot in poll(). */
+bootEl.classList.add('run');
+
+/* ---- collapsible feed panel ---- */
+const feedToggle = document.getElementById('feedToggle');
+function paintFeedToggle() {
+  feedToggle.textContent = document.body.classList.contains('feedless') ? '⟨' : '⟩';
+}
+if (localStorage.getItem('hud-feed-collapsed') === '1') document.body.classList.add('feedless');
+paintFeedToggle();
+feedToggle.addEventListener('click', () => {
+  const collapsed = document.body.classList.toggle('feedless');
+  localStorage.setItem('hud-feed-collapsed', collapsed ? '1' : '0');
+  paintFeedToggle();
+});
+
+/* ---- inbox: typed directives for the session ---- */
+async function postInbox(text) {
+  return fetch('/inbox', { method: 'POST', body: JSON.stringify({ text }) });
+}
+const inboxInput = document.getElementById('inboxInput');
+inboxInput.addEventListener('keydown', async e => {
+  if (e.key !== 'Enter' || !inboxInput.value.trim()) return;
+  await postInbox(inboxInput.value.trim());
+  inboxInput.value = '';
+  inboxInput.placeholder = 'sent ✓';
+  inboxInput.classList.add('sent');
+  setTimeout(() => { inboxInput.placeholder = 'message jarvis…'; inboxInput.classList.remove('sent'); }, 1500);
+});
+
+/* ---- command deck: canonical directives, posted through the same /inbox
+   path as typed messages so they get the same queued/received chip in the
+   comms feed. ---- */
+document.querySelectorAll('#cmdPicker button').forEach(b => b.addEventListener('click', async () => {
+  const label = b.textContent;
+  await postInbox(b.dataset.cmd);
+  b.textContent = 'sent ✓';
+  setTimeout(() => { b.textContent = label; }, 1200);
+}));
+
+/* ---- push-to-talk dictation: record -> resample to 16kHz mono WAV in the
+   browser (no external libs) -> POST /inbox/audio -> server transcribes via
+   local whisper and enqueues it exactly like a typed message. ---- */
+const inboxMic = document.getElementById('inboxMic');
+const micTranscript = document.getElementById('micTranscript');
+let mediaRecorder = null, recChunks = [], recording = false;
+
+function floatTo16BitPCM(floatSamples) {
+  const out = new Int16Array(floatSamples.length);
+  for (let i = 0; i < floatSamples.length; i++) {
+    const s = Math.max(-1, Math.min(1, floatSamples[i]));
+    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return out;
+}
+
+function encodeWavPCM16(samples, sampleRate) {
+  const buf = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buf);
+  const writeStr = (offset, str) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++, offset += 2) view.setInt16(offset, samples[i], true);
+  return new Blob([view], { type: 'audio/wav' });
+}
+
+/* ---- three dictation outcomes, deliberately NOT one label ----
+   /inbox/audio answers {ok, text, tier, reason}. tier "silence" is the RMS
+   gate: the audio never reached whisper, so "no speech detected" is the true
+   statement and this is the ONLY place it is true. Any other tier on ok:false
+   is the directive gate rejecting a transcript it DID hear — a stock filler
+   phrase, or the decoder's own confidence floor. Those two have completely
+   different fixes (check the mic vs. rephrase / check the gate), so until
+   08-24 they shared a label and the gate rejection read as dead hardware. */
+const MIC_TONES = ['heard', 'rejected', 'failed'];
+let micTranscriptTimer = 0;
+
+function micOutcome(r) {
+  if (r.error) return { line: 'dictation refused: ' + r.error, why: '', tone: 'failed' };
+  else if (r.ok && r.text) return { line: `heard: "${r.text}"`, why: '', tone: 'heard' };
+  else if (r.text && r.tier && r.tier !== 'silence')
+    return { line: `rejected [${r.tier}] "${r.text}"`, why: r.reason || '', tone: 'rejected' };
+  else return { line: 'no speech detected', why: '', tone: '' };
+}
+
+/* Persistent in-flight status (listening…, transcribing…). Clears any pending
+   hide AND any leftover tone, so an amber rejection cannot bleed its colour
+   into the next recording, and its timer cannot hide one mid-flight. */
+function setMicStatus(text) {
+  clearTimeout(micTranscriptTimer);
+  micTranscript.hidden = false;
+  micTranscript.classList.remove(...MIC_TONES);
+  micTranscript.replaceChildren(document.createTextNode(text));
+}
+
+function showMicTranscript(line, why, tone) {
+  setMicStatus(line);
+  if (why) {
+    const span = document.createElement('span');
+    span.className = 'why';
+    span.textContent = ' — ' + why;
+    micTranscript.append(span);
+  }
+  if (tone) micTranscript.classList.add(tone);
+  // A rejection carries a reason worth reading; an ack does not.
+  micTranscriptTimer = setTimeout(() => {
+    micTranscript.hidden = true;
+    micTranscript.classList.remove(...MIC_TONES);
+  }, tone === 'rejected' ? 9000 : 4000);
+}
+
+async function onRecordingStop() {
+  recording = false;
+  inboxMic.classList.remove('recording');
+  setMicStatus('transcribing…');
+  try {
+    const blob = new Blob(recChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+    const decodeCtx = new AudioContext();
+    const decoded = await decodeCtx.decodeAudioData(await blob.arrayBuffer());
+    const rate = 16000;
+    const offline = new OfflineAudioContext(1, Math.max(1, Math.ceil(decoded.duration * rate)), rate);
+    const src = offline.createBufferSource();
+    src.buffer = decoded;
+    src.connect(offline.destination);
+    src.start(0);
+    const rendered = await offline.startRendering();
+    const wavBlob = encodeWavPCM16(floatTo16BitPCM(rendered.getChannelData(0)), rate);
+    decodeCtx.close();
+    const r = await (await fetch('/inbox/audio', {
+      method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wavBlob,
+    })).json();
+    const outcome = micOutcome(r);
+    showMicTranscript(outcome.line, outcome.why, outcome.tone);
+  } catch (e) {
+    showMicTranscript('dictation error: ' + e.message, '', 'failed');
+  }
+}
+
+inboxMic.addEventListener('click', async () => {
+  if (recording) {
+    mediaRecorder.stop();
+    return;
+  }
+  try {
+    await ensureMic();
+  } catch (e) {
+    showMicTranscript('mic error: ' + e.message, '', 'failed');
+    return;
+  }
+  recChunks = [];
+  mediaRecorder = new MediaRecorder(micStream);
+  mediaRecorder.ondataavailable = e => { if (e.data.size) recChunks.push(e.data); };
+  mediaRecorder.onstop = onRecordingStop;
+  mediaRecorder.start();
+  recording = true;
+  inboxMic.classList.add('recording');
+  setMicStatus('listening…');
+});
+
+/* ---- quiet toggle (Pat, 08-18: relabeled from "mute") ----
+   The underlying endpoint/state are untouched on purpose — POST/GET /mute
+   and the {"muted": bool} shape stay exactly as-is, because the live
+   session's pre-converse polling and background waiters depend on that
+   byte-for-byte. This is a LABEL fix only, same shape as the earlier
+   standby simplification (UI changed, endpoint didn't).
+   Why: "mute" reads as mic-only (Zoom/Meet convention) but this control is
+   two-way — it silences the assistant's speech AND stops listening, replies go
+   text-only. Pat: "the mute button should also mute the agent's responses
+   ... perhaps it should be called quiet mode." The label now says QUIET —
+   TEXT ONLY so the two-way scope is legible from the button alone, not
+   just the tooltip; the active/red pulse styling (.mute-btn.muted, CSS
+   unchanged) already reads as unmistakably distinct from the amber
+   DEGRADED/STALE/ORPHANED family introduced the same day — quiet is a
+   deliberate choice, not a fault, and keeps its own red. */
+let muted = false;
+function paintMute() {
+  muteBtn.className = 'mute-btn' + (muted ? ' muted' : '');
+  muteBtn.textContent = muted ? '◼ QUIET — TEXT ONLY · TAP FOR LIVE' : '◉ LIVE — TAP FOR QUIET';
+  muteBtn.title = muted
+    ? 'quiet: no speech out, no listening in — replies are text only. tap to go live again'
+    : 'tap for quiet: no speech out, no listening in — text only';
+}
+muteBtn.addEventListener('click', async () => {
+  muted = !muted;
+  paintMute();
+  await fetch('/mute', { method: 'POST', body: JSON.stringify({ muted }) });
+});
+paintMute();
+
+/* skip (08-19): cut the utterance in flight WITHOUT muting. POST /skip
+   fires skip_forward on voicemode's control socket, which cuts playback
+   just as hard as a stop but returns converse an ORDINARY result -- so the
+   session simply advances to its listen turn instead of being told to go
+   quiet. Mute state is deliberately never touched here. */
+const skipBtn = document.getElementById('skipBtn');
+skipBtn.addEventListener('click', async () => {
+  skipBtn.classList.add('fired');
+  setTimeout(() => skipBtn.classList.remove('fired'), 220);
+  try { await fetch('/skip', { method: 'POST', body: '{}' }); } catch (e) { /* HUD control, never block the page */ }
+});
+
+/* ---- ops: click-to-inspect detail + live elapsed time. Elapsed ticks off
+   each op's server-stamped `ts` (start of its current status — see
+   stamp_tasks in server.py) on a client-side 1s timer, NOT the state poll,
+   so it's smooth between polls and costs no extra requests. Expansion state
+   survives the innerHTML rebuild poll() does on task-list change because it
+   lives in expandedOps, not the DOM. ---- */
+const expandedOps = new Set();
+opsEl.addEventListener('click', e => {
+  const item = e.target.closest('.op-item');
+  if (!item) return;
+  const id = item.dataset.id;
+  const detail = item.querySelector('.op-detail');
+  const caret = item.querySelector('.op-caret');
+  const wasOpen = expandedOps.has(id);
+  if (wasOpen) expandedOps.delete(id); else expandedOps.add(id);
+  detail.hidden = wasOpen;
+  if (caret) caret.textContent = wasOpen ? '▸' : '▾';
+});
+function fmtDur(totalSec) {
+  const s = Math.max(0, Math.round(totalSec));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  return h > 0 ? `${h}h ${String(m).padStart(2, '0')}m`
+       : m > 0 ? `${m}m ${String(r).padStart(2, '0')}s`
+       : `${r}s`;
+}
+function opElapsedText(ts, status, nowSec) {
+  if (!ts) return '--';
+  const dur = fmtDur(nowSec - ts);
+  // running/pending: time-in-progress, ticking. done/failed: time since it
+  // finished (ts is stamped on the transition INTO that status — there's no
+  // separate start time once it's finished, so "ago" is the honest read).
+  // orphaned (08-18 round 2): ts here is a client-side epoch BACK-COMPUTED
+  // from the server's real liveness_age (heartbeat_file mtime age) — see
+  // the ops-render block — so "silent" ticks up from the agent's last
+  // REAL evidence of life, not from a POST timestamp. unknown: no real
+  // evidence exists at all, so this just falls through to plain ticking
+  // duration off `ts` (self-reported time-in-status, same as always) —
+  // the "unconfirmed" caveat lives in the status label, not this number.
+  return status === 'orphaned' ? 'silent ' + dur
+       : (status === 'done' || status === 'failed') ? dur + ' ago'
+       : dur;
+}
+function tickOps() {
+  const now = Date.now() / 1000;
+  opsEl.querySelectorAll('.op-item[data-ts]').forEach(item => {
+    const ts = parseFloat(item.dataset.ts);
+    if (!ts) return;
+    const text = opElapsedText(ts, item.dataset.status, now);
+    item.querySelectorAll('.op-elapsed').forEach(el => { el.textContent = text; });
+  });
+}
+setInterval(tickOps, 1000);
+
+/* ---- verified-vs-assumed cache-age readout (08-18) ----
+   Shared by the visual-plans panel and both Asana widgets: each carries a
+   server epoch of when it was actually last checked/fetched plus that
+   panel's own TTL, and this renders "checked Xm ago" ticking live, going
+   .stale (amber, see CSS) once the age exceeds the TTL — i.e. once what's
+   on screen is older than the panel's own promise, so it's an ASSUMED
+   fact rather than one just verified. epoch==0 (never yet checked, e.g.
+   Asana key missing) reads as "never checked", stale by definition. */
+function fetchedSpan(epoch, ttlSeconds) {
+  return `<span class="fetched" data-epoch="${epoch || ''}" data-ttl="${ttlSeconds || ''}">--</span>`;
+}
+function tickCacheAges() {
+  const now = Date.now() / 1000;
+  document.querySelectorAll('.fetched[data-epoch]').forEach(el => {
+    const epoch = parseFloat(el.dataset.epoch);
+    if (!epoch) { el.textContent = 'never checked'; el.classList.add('stale'); return; }
+    const age = now - epoch;
+    const ttl = parseFloat(el.dataset.ttl) || Infinity;
+    el.textContent = 'checked ' + fmtDur(age) + ' ago';
+    el.classList.toggle('stale', age > ttl);
+  });
+}
+setInterval(tickCacheAges, 1000);
+
+/* ---- comms replay (08-24) ----
+   Pat, today: "if we could put a replay button on comms so that I can press
+   play and let's do it again, maybe even at two times speed ... I'm missing
+   things and I want to go back into stuff." He is usually walking around the
+   room while a line is spoken, and the HUD keeps no audio — only text derived
+   from voicemode's event log — so the line survived and the voice did not.
+
+   The audio is therefore RE-SYNTHESISED, not stored: POST /replay runs the
+   line back through the same local kokoro, in the voice it was originally
+   spoken in (a spoken line carries its literal voice id; a text-only POST
+   /say line carries its persona name, which the server resolves back to a
+   voice). Browser SpeechSynthesis was the cheaper option and is not used: one
+   generic voice for every line erases the personas, and the personas are how
+   Pat tells whose finding a line was — that is most of the value here.
+
+   Two hard rules, both enforced below AND on the server side:
+     · QUIET MODE WINS. Muted means silent, replay included. Nothing starts
+       while muted and anything playing is paused the instant mute flips on.
+       This is the guard that matters for a clip already cached in the
+       browser, which never touches the server's own 409.
+     · NEVER TWO VOICES AT ONCE. A replay will not start during a live turn,
+       and pauses itself (keeping its position, so it can be resumed) if one
+       begins mid-replay. */
+const REPLAY_RATES = [1, 1.5, 2];
+const REPLAY_CLIPS_MAX = 16;
+const replayAudio = new Audio();
+/* 2x without this is a chipmunk, which is unlistenable and would make the
+   speed toggle pointless. Chromium defaults it on; set it anyway, and set
+   the prefixed form for any engine still on it. */
+replayAudio.preservesPitch = true;
+if ('webkitPreservesPitch' in replayAudio) replayAudio.webkitPreservesPitch = true;
+/* voice+text -> object URL: a second press of the same line never re-hits the
+   TTS, and scrubbing/rate changes are free. The server keeps its own copy so
+   this survives a page reload too. */
+const replayClips = new Map();
+let feedByKey = new Map();
+let replayKey = null, replayLoading = false;
+let replayNoteKey = null, replayNote = '', replayNoteTimer = 0;
+let replayRate = REPLAY_RATES.includes(parseFloat(localStorage.getItem('hud-replay-rate')))
+  ? parseFloat(localStorage.getItem('hud-replay-rate')) : 1;
+
+const isAssistantLine = l => l.who === 'claude' || l.who === 'say';
+function replayControl(key) {
+  return `<span class="rp" data-rk="${key}"><span class="rp-note"></span>`
+    + `<button class="rp-btn" title="replay this line in the voice it was spoken in">▶</button>`
+    + `<span class="rp-rate">`
+    + REPLAY_RATES.map(r => `<button data-rate="${r}" title="playback speed — pitch preserved">${r}×</button>`).join('')
+    + `</span></span>`;
+}
+
+/* A live turn is voicemode actually speaking. Both sources are read: `status`
+   is the derived state the rest of this page runs on and self-heals at the end
+   of every tool call, `playback.active` is the event log's own start/end pair. */
+function liveTurnActive() {
+  const s = lastState || {};
+  return s.status === 'speaking' || !!((s.playback || {}).active);
+}
+
+function showReplayNote(key, note) {
+  clearTimeout(replayNoteTimer);
+  replayNoteKey = key;
+  replayNote = note;
+  paintReplay();
+  replayNoteTimer = setTimeout(() => { replayNoteKey = null; replayNote = ''; paintReplay(); }, 5000);
+}
+
+function paintReplay() {
+  const playing = !!replayKey && !replayAudio.paused && !replayAudio.ended;
+  linesEl.querySelectorAll('.line[data-rk]').forEach(el => {
+    const key = el.dataset.rk;
+    const active = key === replayKey;
+    el.classList.toggle('replaying', active);
+    const btn = el.querySelector('.rp-btn');
+    if (btn) btn.textContent = active && replayLoading ? '···' : active && playing ? '⏸' : '▶';
+    el.querySelectorAll('.rp-rate button').forEach(b =>
+      b.classList.toggle('on', parseFloat(b.dataset.rate) === replayRate));
+    const note = el.querySelector('.rp-note');
+    if (note) note.textContent = key === replayNoteKey ? replayNote : '';
+  });
+}
+replayAudio.addEventListener('play', paintReplay);
+replayAudio.addEventListener('pause', paintReplay);
+replayAudio.addEventListener('ended', () => { replayKey = null; paintReplay(); });
+
+async function replayClip(line) {
+  const clipKey = (line.voice || line.persona || '') + '\n' + line.text;
+  const cached = replayClips.get(clipKey);
+  if (cached) return { url: cached, error: '' };
+  const res = await fetch('/replay', {
+    method: 'POST',
+    body: JSON.stringify({ text: line.text, voice: line.voice || '', persona: line.persona || '' }),
+  });
+  if (!res.ok) {
+    const why = await res.json().catch(() => ({}));
+    return { url: '', error: why.reason || ('replay failed · http ' + res.status) };
+  }
+  const url = URL.createObjectURL(await res.blob());
+  replayClips.set(clipKey, url);
+  while (replayClips.size > REPLAY_CLIPS_MAX) {
+    const oldest = replayClips.keys().next().value;
+    URL.revokeObjectURL(replayClips.get(oldest));
+    replayClips.delete(oldest);
+  }
+  return { url, error: '' };
+}
+
+/* The one refusal check, applied before starting AND again after synthesis —
+   a long line takes a second or two to come back, and mute or a live turn can
+   arrive inside that window. */
+function replayBlockedBy() {
+  return hudMuted ? 'quiet mode' : liveTurnActive() ? 'live turn' : '';
+}
+
+async function toggleReplay(key) {
+  const line = feedByKey.get(key);
+  if (!line) return;
+  if (replayKey === key && !replayAudio.paused) { replayAudio.pause(); return; }
+  const blocked = replayBlockedBy();
+  if (blocked) return showReplayNote(key, blocked);
+  if (replayKey === key && replayAudio.src) {
+    try { await replayAudio.play(); } catch (e) { showReplayNote(key, 'playback blocked'); }
+    return;
+  }
+  replayAudio.pause();
+  replayKey = key;
+  replayLoading = true;
+  paintReplay();
+  const { url, error } = await replayClip(line);
+  replayLoading = false;
+  if (replayKey !== key) return;            // superseded while synthesising
+  const blockedNow = error || replayBlockedBy();
+  if (blockedNow) { replayKey = null; paintReplay(); return showReplayNote(key, blockedNow); }
+  replayAudio.src = url;
+  replayAudio.playbackRate = replayRate;
+  try { await replayAudio.play(); } catch (e) { replayKey = null; showReplayNote(key, 'playback blocked'); }
+  paintReplay();
+}
+
+function setReplayRate(rate) {
+  replayRate = rate;
+  localStorage.setItem('hud-replay-rate', String(rate));
+  replayAudio.playbackRate = rate;          // applies mid-utterance, no restart
+  paintReplay();
+}
+
+linesEl.addEventListener('click', e => {
+  const rateBtn = e.target.closest('.rp-rate button');
+  if (rateBtn) return setReplayRate(parseFloat(rateBtn.dataset.rate));
+  const playBtn = e.target.closest('.rp-btn');
+  const line = playBtn && playBtn.closest('.line[data-rk]');
+  if (line) toggleReplay(line.dataset.rk);
+});
+
+/* Called from poll() once the fresh state is in hand. Pausing rather than
+   stopping keeps the position, so a replay interrupted by a live turn can be
+   picked up where it was cut instead of started over. */
+function guardReplay() {
+  if (!replayKey || replayAudio.paused) return;
+  const blocked = replayBlockedBy();
+  if (blocked) { replayAudio.pause(); showReplayNote(replayKey, blocked); }
+}
+
+/* ---- wake / directive acknowledgement (08-24) ----
+   Pat, today: "I'm not getting any feedback from 'Hey Jarvis' at all." The
+   wake word works — his message arrived that way — but nothing on this page
+   ever changed when one was accepted, so a healthy wake word and a dead one
+   looked identical and he has reported it down while it was fine.
+
+   The signal already existed: always_on_listener.py posts the stripped
+   directive to POST /inbox, which lands in the comms feed as a `typed` entry
+   within one poll. A bare "hey jarvis" with nothing after it posts the
+   reserved `wake:` sentinel prefix (see WAKE_ONLY_TEXT in that file), so the
+   two cases can be captioned honestly and differently. Typed and dictated
+   directives take the same path and get the same acknowledgement — same
+   signal, same need.
+
+   VISUAL ONLY. Both voicemode feedback tones are off on purpose and this adds
+   no sound of its own. */
+const WAKE_ACK_MS = 2600;
+const wakeAck = document.getElementById('wakeAck');
+const wakeAckMain = document.getElementById('wakeAckMain');
+const wakeAckSub = document.getElementById('wakeAckSub');
+let lastDirectiveEp = null, wakeAckTimer = 0;
+function flashWakeAck(text) {
+  const bare = text.startsWith('wake:');
+  wakeAckMain.textContent = bare ? 'Hey Jarvis' : 'Heard';
+  wakeAckSub.textContent = bare ? 'hearing you' : text.slice(0, 110);
+  // force a reflow so the ring animation restarts from zero on a second
+  // directive inside the display window — same trick as the boot overlay
+  wakeAck.classList.remove('on');
+  void wakeAck.offsetWidth;
+  wakeAck.classList.add('on');
+  clearTimeout(wakeAckTimer);
+  wakeAckTimer = setTimeout(() => wakeAck.classList.remove('on'), WAKE_ACK_MS);
+}
+
+/* ---- state polling ---- */
+let lastFeedKey = '', lastStatus = '', lastOpsKey = '', lastPlansKey = '', view = 'comms', lastState = null;
+let lastFeedActivityEp = null;  // newest comms-entry epoch seen — drives wake-on-activity in poll()
+let lastDueSoonKey = '', lastKanbanKey = '';
+
+/* ---- asana widgets: server pre-fetches + caches, this just renders the
+   already-cached state.json fields; hidden whenever unavailable or empty ---- */
+function renderDueSoon(d, ttl) {
+  // 08-19: Pat's working filter — tasks due this week + past due (server
+  // fetch_due_soon), replacing the old due-soon epics outright. Rows:
+  // name (ellipsized) · source tag · due date; overdue rows in the unified
+  // alert red with an OVERDUE chip, due-today gold, "+N more" instead of
+  // silent truncation.
+  const key = JSON.stringify(d);
+  if (key === lastDueSoonKey) return;
+  lastDueSoonKey = key;
+  const el = document.getElementById('dueSoon');
+  const items = d.items || [];
+  el.hidden = d.unavailable || items.length === 0;
+  el.innerHTML = `<div class="vlabel">DUE / OVERDUE ${fetchedSpan(d.fetched_epoch, ttl)}</div>` +
+    items.map(i => {
+      const cls = i.overdue ? ' overdue' : i.days_left === 0 ? ' today' : '';
+      const due = i.overdue
+        ? `${escT((i.due_on || '').slice(5))}<span class="due-chip">overdue</span>`
+        : `${escT((i.due_on || '').slice(5))} · ${i.days_left}d`;
+      return `<div class="info-row${cls}"><span class="task-name" title="${escT(i.name)}">${escT(i.name)}</span><span class="tag">${escT(i.tag || '')}</span><span class="days">${due}</span></div>`;
+    }).join('') +
+    (d.more ? `<div class="more-row">+ ${d.more} more past due / this week</div>` : '');
+  tickCacheAges();
+}
+function renderKanban(k, ttl) {
+  const key = JSON.stringify(k);
+  if (key === lastKanbanKey) return;
+  lastKanbanKey = key;
+  const el = document.getElementById('kanban');
+  const sections = k.sections || [];
+  el.hidden = k.unavailable || sections.length === 0;
+  el.innerHTML = `<div class="vlabel">KANBAN ${fetchedSpan(k.fetched_epoch, ttl)}</div>` +
+    sections.map(s =>
+      `<div class="kanban-section"><div class="sec-head"><span>${escT(s.name)}</span><span>${s.count}</span></div>` +
+      (s.tickets || []).map(t => `<div class="ticket">· ${escT(t)}</div>`).join('') +
+      `</div>`
+    ).join('');
+  tickCacheAges();
+}
+const tabComms = document.getElementById('tabComms');
+const tabWork = document.getElementById('tabWork');
+function setView(v) {
+  view = v;
+  tabComms.className = v === 'comms' ? 'on' : '';
+  tabWork.className = v === 'work' ? 'on' : '';
+  lastFeedKey = '';
+  if (lastState) renderFeed(lastState);
+}
+tabComms.addEventListener('click', () => setView('comms'));
+tabWork.addEventListener('click', () => setView('work'));
+
+function renderFeed(s) {
+  const entries = view === 'comms' ? (s.lines || []) : (s.worklog || []);
+  const feedKey = view + JSON.stringify(entries);
+  if (feedKey === lastFeedKey) return;
+  lastFeedKey = feedKey;
+  feedCount.textContent = (view === 'comms' ? (s.total || entries.length) : entries.length) + ' entries';
+  // Replay state lives in JS keyed by each line's epoch, never in the DOM,
+  // so it survives this wholesale rebuild — same discipline as expandedOps.
+  feedByKey = new Map(entries.filter(isAssistantLine).map(l => [String(l.ep), l]));
+  // Only follow the tail if he is already AT the tail. Yanking the feed to
+  // the bottom while he is scrolled up re-reading an old line is precisely
+  // the thing replay exists to let him do.
+  const atBottom = linesEl.scrollHeight - linesEl.scrollTop - linesEl.clientHeight < 80;
+  linesEl.innerHTML = view === 'comms'
+    ? entries.map(l =>
+        `<div class="line ${l.who === 'you' ? 'you' : l.who === 'typed' ? 'typed' : l.who === 'say' ? 'say' : 'claude'}"${isAssistantLine(l) ? ` data-rk="${l.ep}"` : ''}>
+           <span class="who"><span>${
+             l.who === 'you' ? '▸ Pat'
+             : l.who === 'typed' ? '▸ Pat · ⌨<span class="chip ' + (l.status === 'seen' ? 'seen' : '') + '">' + esc(l.status === 'seen' ? 'received' : 'queued') + '</span>'
+             // say (08-18): quiet-mode reply via POST /say — assistant line
+             // that was deliberately never spoken; chip it text-only.
+             : l.who === 'say' ? '◂ ' + esc((l.persona || 'Jarvis').toLowerCase()) + '<span class="chip textonly" title="quiet mode — delivered as text only, never spoken">text</span>'
+             // truncated (08-18): whole-session recovery still failed to find
+             // this utterance's full text — what follows is the 200-char
+             // event-log prefix, not the complete line. Mark it rather than
+             // render a silently-cut line as if it were whole.
+             : '◂ ' + esc((l.voice || 'george').replace(/^[ab][fm]_/, '')) + (l.truncated ? '<span class="chip trunc" title="full text not found in the session transcript — showing the 200-char event-log prefix only">truncated</span>' : '')
+           }</span><span class="right">${isAssistantLine(l) ? replayControl(l.ep) : ''}<span class="t">${l.t || ''}</span></span></span>${esc(l.text)}
+         </div>`).join('')
+    : entries.map(l =>
+        `<div class="line work">
+           <span class="who"><span>◂ session</span><span class="t">${l.t || ''}</span></span>${esc(l.text)}
+         </div>`).join('');
+  if (atBottom) linesEl.scrollTop = linesEl.scrollHeight;
+  paintReplay();
+}
+const esc = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = (v, f) => v == null ? '—' : f(v);
+async function poll() {
+  try {
+    const s = await (await fetch('state.json?t=' + Date.now())).json();
+    if (!rosterBuilt && s.roster) buildRoster(s.roster);
+    const tasks = s.tasks || [];
+    // ORPHANED ops (08-18 round 2: server-verified via heartbeat_file —
+    // see server.py task_liveness) are excluded from every "N ops live"
+    // computation below (busy state, the stat tile, the calm/active/alert
+    // tier) — a REAL probe found no evidence of life, so this is a
+    // disproven claim, not a live one. UNKNOWN ops (no heartbeat_file at
+    // all, so nothing was ever disproven) still COUNT — same trust as
+    // before this whole pass existed, just visibly flagged elsewhere as
+    // unconfirmed rather than silently treated as equal to verified.
+    const running = tasks.filter(t => t.status === 'running' && t.liveness !== 'orphaned').length;
+    const voiceIdle = s.status === 'standby';
+    const busy = s.session_active || running > 0;
+    const working = voiceIdle && busy;
+    const free = voiceIdle && !busy;
+    const listenerAlive = !!(s.listening && s.listening.alive);
+    // DEGRADED (08-18): the daemon's process is up and its loop is turning,
+    // but no chunk has carried real audio for a while — it is bound to a
+    // device that isn't routed and is returning digital silence. This used
+    // to render as a confident green ARMED, which is how "hey jarvis" could
+    // be dead for a whole working session with nothing on the page saying
+    // so. Treated as NOT armed everywhere below: an indicator that admits
+    // it can't hear is the entire point.
+    const listenerDegraded = !!(s.listening && s.listening.degraded);
+    // MUTED (08-19): intent vs reality, kept apart on purpose — see the
+    // hudMuted/hudCapturePaused declarations up top.
+    hudMuted = !!s.muted;
+    hudCapturePaused = ((s.listening || {}).mode === 'paused');
+    document.body.classList.toggle('muted', hudMuted);
+    // 08-19: SKIP only means something while an utterance is actually
+    // playing, so it only lights up then (same source as the tint below).
+    document.body.classList.toggle('tts-live', s.status === 'speaking' && !hudMuted);
+    muteBadgeSub.textContent = !hudMuted ? 'mic off · text only'
+      : !listenerAlive ? 'wake listener offline'
+      : hudCapturePaused ? 'sensors paused · confirmed by the wake daemon'
+      : 'sensors winding down…';
+
+    // Two user-facing states (Pat, 08-17): LISTENING (the default resting
+    // state — the wake listener is armed, "hey jarvis" works any time,
+    // including while the assistant is working) and MUTED (hard off,
+    // nothing is heard). Everything else here is activity indication
+    // layered on top of "still listening", never a mode that implies
+    // deafness — except OFFLINE, which is the one case where the honest
+    // answer really is "can't hear you right now" (the daemon isn't alive
+    // to hear anything, wake word or not).
+    const statusKey = s.muted ? 'muted'
+      : !listenerAlive ? 'offline'
+      : listenerDegraded ? 'degraded' + (s.listening.degraded_reason || '')
+      : working ? 'working' + running
+      : free ? 'resting'
+      : s.status;
+    if (statusKey !== lastStatus) {
+      lastStatus = statusKey;
+      statusLine.textContent = s.muted ? 'muted — mic off · text only, nothing spoken or heard'
+        : !listenerAlive ? 'listener offline — can’t hear "hey jarvis"'
+        : listenerDegraded ? `listener degraded — ${s.listening.degraded_reason || 'not hearing usable audio'}`
+        : working ? (running > 0 ? `working · ${running} op${running > 1 ? 's' : ''} live · still listening` : 'working · still listening')
+        : free ? 'listening — say "hey jarvis"'
+        : s.status === 'speaking' ? 'speaking'
+        : s.status === 'listening' ? 'hearing you'
+        : s.status === 'processing' ? 'processing · still listening'
+        : s.status;
+      statusLine.className = 'status-line ' + (s.muted ? 'muted'
+        : !listenerAlive ? 'offline'
+        : listenerDegraded ? 'processing'
+        : working ? 'processing'
+        : free ? ''
+        : s.status === 'speaking' ? 'speaking'
+        : s.status === 'listening' || s.status === 'processing' ? 'processing'
+        : '');
+      // thin one-shot border sweep on every state change (JARVIS pass):
+      // the className set above already dropped 'swept'; force a reflow so
+      // re-adding it restarts the animation from zero.
+      void statusLine.offsetWidth;
+      statusLine.classList.add('swept');
+    }
+    if (typeof s.muted === 'boolean' && s.muted !== muted) { muted = s.muted; paintMute(); }
+    activeVoice = s.voice || 'bm_george';
+    requestedVoice = s.requested_voice || requestedVoice;
+    if (requestedVoice === activeVoice) requestedVoice = null;
+    roVoice.textContent = activeVoice.toUpperCase();
+    paintRoster();
+
+    // The level readout is shown ALWAYS, not only when degraded. The whole
+    // failure this came from was a number nobody could see: the daemon was
+    // green while its loudest audio sat at 0.003x the threshold it must
+    // cross to be transcribed at all. Putting peak-vs-gate in the tooltip
+    // makes that ratio checkable at a glance instead of requiring a
+    // measurement session to discover.
+    const L = s.listening || {};
+    const lvl = L.gate == null || L.peak_rms == null ? ''
+      : ` · peak ${L.peak_rms} vs gate ${L.gate} (${L.gate_ratio}x) over ${Math.round((L.level_window || 0) / 60)}min`;
+    roListening.textContent = !listenerAlive ? 'OFFLINE' : s.muted ? 'PAUSED' : listenerDegraded ? 'DEGRADED' : 'ARMED';
+    roListening.title = !listenerAlive ? 'wake daemon heartbeat is stale — nothing is listening'
+      : s.muted ? `muted — capture paused${hudCapturePaused ? ' (confirmed by the daemon)' : ' (daemon has not reported paused yet)'}; the audio stream stays open so unmuting resumes instantly${lvl}`
+      : listenerDegraded ? `${L.degraded_reason || 'degraded'} — ${L.device || 'unknown device'}${lvl}`
+      : `hearing ${L.device || 'default input'}${lvl}`;
+    roListening.classList.toggle('offline', !listenerAlive);
+    roListening.classList.toggle('paused', listenerAlive && !!s.muted);
+    roListening.classList.toggle('degraded', listenerAlive && !s.muted && listenerDegraded);
+
+    const tel = s.telemetry || {};
+    document.getElementById('tTtfa').textContent  = fmt(tel.ttfa_ms, v => (v / 1000).toFixed(1) + 's');
+    document.getElementById('tTts').textContent   = fmt(tel.tts_ms,  v => (v / 1000).toFixed(1) + 's');
+    document.getElementById('tRec').textContent   = fmt(tel.rec_s,   v => v.toFixed(1) + 's');
+    document.getElementById('tStt').textContent   = fmt(tel.stt_ms,  v => (v / 1000).toFixed(1) + 's');
+    document.getElementById('tTurns').textContent = fmt(tel.turns,   v => v);
+
+    const setStat = (id, v) => {
+      const el = document.getElementById(id);
+      el.textContent = v;
+      el.className = 'n' + (v ? '' : ' zero');
+    };
+    setStat('stOps', running);
+    setStat('stPlans', (s.plans || []).filter(p => p.live).length);
+    setStat('stTurns', (s.telemetry || {}).turns || 0);
+
+    const opsKey = JSON.stringify(tasks);
+    if (opsKey !== lastOpsKey) {
+      lastOpsKey = opsKey;
+      opsEl.hidden = tasks.length === 0;
+      // Count in the label: the list scrolls inside its own region now, so
+      // from across the room the header must still say how many there are —
+      // a scrolled-out op is not a hidden op.
+      opsEl.innerHTML = `<div class="olabel">ACTIVE OPS · ${tasks.length}</div>` + tasks.map((t, i) => {
+        const id = String(t.id != null ? t.id : 'op' + i);
+        // liveness (08-18 round 2, server.py task_liveness): a REAL probe
+        // on the agent's own heartbeat_file, not on how recently the
+        // orchestrator re-posted (round 1's bug). Three cases for a
+        // "running" item — CSS class + label both switch on `liveness`,
+        // never on raw status alone, so a claim we can't back up never
+        // renders identically to one we can:
+        //   verified -> plain 'running' (unchanged look, now backed by
+        //     real evidence instead of a bare self-report)
+        //   orphaned -> a real probe found no evidence of life
+        //   unknown  -> no heartbeat_file at all, nothing to probe
+        const displayStatus = t.liveness === 'orphaned' ? 'orphaned'
+          : t.liveness === 'unknown' ? 'unknown'
+          : (t.status || '');
+        const statusText = t.liveness === 'orphaned' ? 'orphaned'
+          : t.liveness === 'unknown' ? 'running · unconfirmed'
+          : (t.status || '');
+        // orphaned: elapsedTs is a client epoch BACK-COMPUTED from the
+        // server's liveness_age (real evidence age) using the client's own
+        // clock, so "silent Xm" ticks from the agent's last real activity —
+        // not from a POST timestamp (that was round 1's mistake). unknown
+        // and verified both just use `ts` (self-reported time-in-status),
+        // same as before this pass existed.
+        const elapsedTs = t.liveness === 'orphaned' && t.liveness_age != null
+          ? (Date.now() / 1000) - t.liveness_age
+          : t.ts;
+        const label = esc(t.label || '');
+        const persona = t.persona ? esc(t.persona) : '';
+        const detail = t.detail ? esc(t.detail) : '';
+        const open = expandedOps.has(id);
+        const liveTitle = t.liveness === 'orphaned'
+          ? `title="no activity on its heartbeat file in ${t.liveness_age != null ? fmtDur(t.liveness_age) : 'a while'} — presumed dead, not still working"`
+          : t.liveness === 'unknown'
+          ? `title="no heartbeat_file on this item — self-reported only, cannot independently verify it's still running"`
+          : '';
+        return `<div class="op-item" data-id="${esc(id)}" data-ts="${elapsedTs || ''}" data-status="${esc(displayStatus)}">
+          <div class="op ${esc(displayStatus)}" ${liveTitle}>
+            <span class="op-caret">${open ? '▾' : '▸'}</span>${label}
+            <span class="st">${esc(statusText)} · <span class="op-elapsed">--</span></span>
+          </div>
+          <div class="op-detail"${open ? '' : ' hidden'}>
+            ${persona ? `<div class="persona">${persona}</div>` : ''}
+            <div class="label-full">${label}</div>
+            <div class="meta">${esc(statusText)} · <span class="op-elapsed">--</span></div>
+            ${t.liveness === 'orphaned' ? `<div class="desc">ASSUMED, not verified — no activity confirmed in ${t.liveness_age != null ? fmtDur(t.liveness_age) + ' ago' : 'a while'}; posted status was still "running".</div>` : ''}
+            ${t.liveness === 'unknown' ? `<div class="desc">UNCONFIRMED — no heartbeat_file on this item; self-reported running, never independently verified.</div>` : ''}
+            ${detail ? `<div class="desc">${detail}</div>` : ''}
+          </div>
+        </div>`;
+      }).join('');
+      tickOps();
+    }
+
+    tasks.forEach(k => {
+      if (prevOpStatuses[k.id] === 'running' && (k.status === 'done' || k.status === 'failed')) {
+        opFlash[k.id] = performance.now() + 1200;
+      }
+      prevOpStatuses[k.id] = k.status;
+    });
+    currentTasks = tasks;
+    // Key includes plans_checked_epoch (not just the plans array) so the
+    // panel actually re-renders every ~30s cache cycle even when nothing's
+    // live/dead status flipped — otherwise the "checked Xs ago" span below
+    // would freeze at whatever epoch happened to be baked in at the last
+    // list change, silently going stale itself (08-18).
+    const plansKey = JSON.stringify([s.plans || [], s.plans_checked_epoch]);
+    if (plansKey !== lastPlansKey) {
+      lastPlansKey = plansKey;
+      const plansEl = document.getElementById('plans');
+      const plans = s.plans || [];
+      plansEl.hidden = plans.length === 0;
+      plansEl.innerHTML = `<div class="vlabel">VISUAL PLANS ${fetchedSpan(s.plans_checked_epoch, s.plans_cache_seconds)}</div>` + plans.map(p =>
+        `<a class="${p.live ? 'live' : 'dead'}" href="${escT(p.url)}" target="_blank" rel="noopener">${escT(p.name.replace(/-/g, ' '))}${p.live ? '' : ' · offline'}</a>`
+      ).join('');
+      tickCacheAges();
+    }
+    renderDueSoon(s.due_soon || { items: [], unavailable: true, fetched_at: '', fetched_epoch: 0 }, s.asana_cache_seconds);
+    renderKanban(s.kanban || { sections: [], unavailable: true, fetched_at: '', fetched_epoch: 0 }, s.asana_cache_seconds);
+    tintEl.className =
+      s.muted ? 'muted'
+      : s.status === 'speaking' ? 'speaking'
+      : s.status === 'listening' ? 'listening'
+      : working ? 'working' : '';
+    // wake-on-activity (08-18): a NEW comms entry — a typed/dictated inbox
+    // directive ("hey Jarvis" arrives here via always_on_listener's POST
+    // /inbox) or an assistant line, spoken or text-only POST /say — exits
+    // the screensaver even though it flips no status and makes nothing
+    // "busy". First poll only baselines (a page opened onto old history
+    // shouldn't count it as fresh activity).
+    const feedEp = Math.max(0, ...(s.lines || []).map(l => l.ep || 0));
+    if (lastFeedActivityEp !== null && feedEp > lastFeedActivityEp) wakeFromAmbient();
+    lastFeedActivityEp = Math.max(feedEp, lastFeedActivityEp ?? 0);
+    // A directive landed — wake phrase, typed, or dictated, all three arrive
+    // as `typed` comms entries. First poll only baselines, so opening the
+    // page onto old history never flashes an acknowledgement for it.
+    const directives = (s.lines || []).filter(l => l.who === 'typed');
+    const dirEp = Math.max(0, ...directives.map(l => l.ep || 0));
+    if (lastDirectiveEp !== null && dirEp > lastDirectiveEp && directives.length) {
+      flashWakeAck(directives.reduce((a, b) => ((b.ep || 0) > (a.ep || 0) ? b : a)).text || '');
+    }
+    lastDirectiveEp = Math.max(dirEp, lastDirectiveEp ?? 0);
+    if (!free) lastBusyAt = performance.now();
+    document.body.classList.toggle('ambient', free && performance.now() - lastBusyAt > 300000);
+    const tier = tasks.some(k => k.status === 'failed') ? 'alert'
+               : (running > 0 || !voiceIdle) ? 'active' : 'calm';
+    ['calm', 'active', 'alert'].forEach(c => document.body.classList.toggle(c, c === tier));
+
+    if (prevStandby === true && s.standby === false) {
+      bootEl.classList.remove('run'); void bootEl.offsetWidth; bootEl.classList.add('run');
+    }
+    prevStandby = s.standby;
+
+    lastState = s;
+    // AFTER lastState, so liveTurnActive() reads this poll's state and not the
+    // previous one: quiet mode or a live turn cuts an in-flight replay here.
+    guardReplay();
+    renderFeed(s);
+  } catch (e) { /* server restarting */ }
+}
+setInterval(poll, 1000);
+poll();
+</script>
+</body>
+</html>
