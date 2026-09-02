@@ -1,0 +1,26 @@
+# Always-on wake-word listener — the Linux counterpart of
+# deploy/launchd/com.voicemode.always-on-listener.plist. Supervises
+# always_on_listener so a crash the code cannot catch (a PortAudio fault on a
+# device disconnect) still self-heals within seconds. The script's own
+# singleton lock makes a manual launch alongside this a safe no-op.
+#
+# Needs a python with sounddevice + numpy (libportaudio2 from apt):
+#   cd ~/repos/voice-hud && uv venv && uv pip install -e ".[listener]"
+# Install:
+#   cp deploy/systemd/voice-hud-listener.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now voice-hud-listener
+#   systemctl --user status voice-hud-listener   # must be active, or nothing is listening
+[Unit]
+Description=voice-hud always-on wake-word listener
+After=voice-hud-server.service pipewire.service wireplumber.service
+Wants=voice-hud-server.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/repos/voice-hud
+ExecStart=%h/repos/voice-hud/.venv/bin/python -m voice_hud.always_on_listener
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

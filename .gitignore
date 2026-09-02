@@ -1,0 +1,28 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.DS_Store
+*:Zone.Identifier
+
+# Local python env for the listener (sounddevice + numpy)
+.venv/
+
+# Runtime state lives under $VOICE_HUD_STATE_DIR (default ~/.local/state/voice-hud),
+# never in the checkout. These patterns only matter if you point it back here.
+tasks.json
+standby.json
+mute.json
+inbox.json
+inbox_history.json
+voice_override.json
+listening_heartbeat.json
+wake_debounce.json
+gate_mode.json
+says.json
+*.pid
+
+# macOS-only launchers, if you keep local unshared copies
+*.applescript

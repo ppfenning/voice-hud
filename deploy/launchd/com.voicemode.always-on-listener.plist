@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- com.voicemode.always-on-listener.plist -->
+<!-- Supervises always_on_listener.py so a crash the code itself can't -->
+<!-- prevent (e.g. a hard PortAudio/CoreAudio fault, not just a catchable -->
+<!-- Python exception) still self-heals within seconds. Added 2026-08-17 -->
+<!-- after a silent death on a Bluetooth device disconnect left the owner with -->
+<!-- no listening daemon and no diagnosis (empty log). The script itself -->
+<!-- also guards against duplicates (acquire_singleton_lock()), so a -->
+<!-- manual launch alongside this one is a safe no-op rather than two -->
+<!-- daemons fighting over the mic. -->
+<!-- INSTALL (this repo copy is the source of truth; the live file is a -->
+<!-- plain copy, NOT a symlink, because launchd does not reliably follow -->
+<!-- symlinks in ~/Library/LaunchAgents): -->
+<!--   __VOICE_HUD_DIR__ is the repository root, __VOICEMODE_PYTHON__ a python with -->
+<!--   sounddevice + numpy (voicemode's own works). Then: -->
+<!--   cp deploy/launchd/com.voicemode.always-on-listener.plist ~/Library/LaunchAgents/ -->
+<!--   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.voicemode.always-on-listener.plist -->
+<!--   launchctl list | grep always-on   # must print the label, or nothing is supervising -->
+<!-- 2026-08-18: this plist existed but had NEVER been bootstrapped, so the -->
+<!-- always_on_listener.py code paths that deliberately exit non-zero "for -->
+<!-- the supervisor to restart a clean process" were in fact permanent -->
+<!-- death. Verified working after loading: SIGKILL -> respawned in <8s. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.voicemode.always-on-listener</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__VOICEMODE_PYTHON__</string>
+        <string>-m</string>
+        <string>voice_hud.always_on_listener</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__VOICE_HUD_DIR__</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>3</integer>
+    <key>StandardOutPath</key>
+    <string>/tmp/always-on-listener.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/always-on-listener.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+    </dict>
+</dict>
+</plist>

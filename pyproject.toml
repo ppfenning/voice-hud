@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voice-hud"
+version = "0.1.0"
+description = "Local always-on voice loop and glanceable browser HUD for Claude Code voice sessions"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.12"
+# The server is stdlib-only on purpose. Only the microphone-owning listener
+# needs anything installed, and it is an extra so the server and the tests
+# run anywhere.
+dependencies = []
+
+[project.optional-dependencies]
+listener = ["sounddevice", "numpy"]
+dev = ["pytest"]
+
+[project.urls]
+Repository = "https://github.com/ppfenning/voice-hud"
+
+[tool.setuptools.packages.find]
+include = ["voice_hud*"]
+
+[tool.setuptools.package-data]
+voice_hud = ["static/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
