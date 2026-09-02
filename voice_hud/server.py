@@ -55,6 +55,25 @@ Endpoints:
                        heartbeat_file, once set, survives a later POST that
                        omits it (see stamp_tasks) so an unrelated field edit
                        can't silently drop the liveness handle.
+  GET  /work        -> {"due": [...], "boards": [...], "posted": bool} an
+                       external tracker's view of what's due and what its
+                       boards look like — a plain replace-list, no aging, no
+                       liveness (that machinery is /tasks-specific; see
+                       task_liveness/HEARTBEAT_STALE_SECONDS, which do NOT
+                       apply here). `posted` is true the moment ANYTHING has
+                       ever been POSTed, even an intentionally empty
+                       {"due": [], "boards": []} — it answers "has a poster
+                       ever spoken", not "is there anything to show", so the
+                       HUD can distinguish "no tracker configured" from "the
+                       tracker says nothing's due right now".
+  POST /work        -> replace the whole shape {"due": [...], "boards": [...]}
+                       (poster is the writer). Both fields are REQUIRED and
+                       must be lists — missing or wrong-typed either one is
+                       rejected 400 {"ok": false, "error": ...} and
+                       WORK_STATE_FILE is left untouched (no partial write).
+                       Filling this contract with real data (a tracker
+                       adapter, a markdown-directory backend, etc.) lives
+                       outside this repository.
   GET  /inbox       -> {"items": [{text, ts}]} typed directives from the page; the
                        Claude session polls before each converse and clears after acting
   POST /inbox       -> append a directive {"text": "..."}; counts as activity for
@@ -203,6 +222,7 @@ TASKS_FILE = HUD_DIR / "tasks.json"
 INBOX_FILE = HUD_DIR / "inbox.json"
 INBOX_HISTORY_FILE = HUD_DIR / "inbox_history.json"
 SAYS_FILE = HUD_DIR / "says.json"
+WORK_STATE_FILE = HUD_DIR / "work_state.json"
 SAYS_STORED = 100   # durability cap, matches inbox_history
 SAYS_SERVED = 50    # feed-payload cap — only the newest slice reaches /state.json
 MAX_EVENTS = 800
@@ -561,6 +581,24 @@ def read_tasks_raw() -> list:
     )
     items = stored.get("items")
     return items if isinstance(items, list) else []
+
+
+def read_work_state() -> dict:
+    """The /work contract: a plain replace-list, no aging, no liveness —
+    that machinery is /tasks-specific (see task_liveness). `posted` answers
+    "has anything ever been posted here", derived from WORK_STATE_FILE's
+    EXISTENCE, not from `due`/`boards` being non-empty — a poster that
+    legitimately has nothing due and no boards still gets to say so, and
+    that must read as posted:true, not as "nobody's ever called this"."""
+    exists = WORK_STATE_FILE.exists()
+    stored = (parse_json(WORK_STATE_FILE.read_text()) or {}) if exists else {}
+    due = stored.get("due")
+    boards = stored.get("boards")
+    return {
+        "due": due if isinstance(due, list) else [],
+        "boards": boards if isinstance(boards, list) else [],
+        "posted": exists,
+    }
 
 
 def heartbeat_age(path):
@@ -1507,6 +1545,7 @@ def build_state() -> dict:
         "standby": read_standby()["standby"],
         "tasks": read_tasks()["items"],
         "cast": read_cast()["seats"],
+        "work": read_work_state(),
         "worklog": read_worklog(session_lines),
         "session_active": session_active(),
         "plans": plans,
@@ -1556,6 +1595,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(json.dumps(read_tasks()).encode(), "application/json")
         elif route == "/cast":
             return self._send(json.dumps(read_cast()).encode(), "application/json")
+        elif route == "/work":
+            return self._send(json.dumps(read_work_state()).encode(), "application/json")
         elif route == "/inbox":
             return self._send(json.dumps(read_inbox()).encode(), "application/json")
         elif route == "/health":
@@ -1691,6 +1732,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(json.dumps({"ok": True, "count": len(items)}).encode(), "application/json")
             else:
                 return self._send(json.dumps({"ok": False, "error": "items must be a list"}).encode(), "application/json", 400)
+        elif route == "/work":
+            due = payload.get("due")
+            boards = payload.get("boards")
+            if isinstance(due, list) and isinstance(boards, list):
+                WORK_STATE_FILE.write_text(json.dumps({"due": due, "boards": boards}))
+                return self._send(json.dumps({"ok": True}).encode(), "application/json")
+            else:
+                return self._send(json.dumps({"ok": False, "error": "due and boards must both be lists"}).encode(), "application/json", 400)
         elif route == "/inbox":
             text = str(payload.get("text") or "").strip()[:2000]
             if text:
