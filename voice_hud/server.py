@@ -276,7 +276,7 @@ def parse_seat(text: str) -> dict | None:
     tools = [t.strip() for t in fields.get("tools", "").split(",") if t.strip()]
     voice = _VOICE_RE.search(body)
     description = fields.get("description", "")
-    surface = re.split(r"[.:]\s", description, 1)[0][:90]
+    surface = re.split(r"[.:]\s", description, maxsplit=1)[0][:90]
     return {
         "name": name,
         "voice": voice.group(1) if voice else "",
