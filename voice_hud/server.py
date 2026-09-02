@@ -75,7 +75,7 @@ Endpoints:
                        Returns {"ok": bool, "error": str}; ok:false with
                        "nothing playing" just means nothing was speaking.
   POST /say         -> {"text": "...", "persona": "Jarvis"?} append a TEXT-ONLY
-                       assistant reply (quiet mode — Pat muted, so the session
+                       assistant reply (quiet mode — the owner muted, so the session
                        never calls the voice tool; the reply must still land in
                        the comms feed). Timestamped server-side, persisted to
                        says.json (same durability pattern as inbox_history.json),
@@ -89,7 +89,7 @@ Endpoints:
                        voice id and always wins; `persona` is a text-only
                        POST /say line's display name, resolved back to its
                        kokoro voice BY NAME — replaying in the original
-                       persona is the point, since that is how Pat tells
+                       persona is the point, since that is how the owner tells
                        whose finding a line was. Synthesised at
                        VOICEMODE_TTS_SPEED so a 1x replay matches how the
                        line actually sounded; the page's 1x/1.5x/2x toggle
@@ -124,7 +124,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from wake_guard import (
+from voice_hud.paths import STATE_DIR
+from voice_hud.wake_guard import (
     RMS_GATE,
     decoder_signals,
     describe,
@@ -135,7 +136,8 @@ from wake_guard import (
 )
 
 PORT = 8123
-HUD_DIR = Path(__file__).resolve().parent
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+HUD_DIR = STATE_DIR  # runtime state lives outside the package; see voice_hud.paths
 EVENTS_DIR = Path.home() / ".voicemode" / "logs" / "events"
 # Claude Code slugifies the watched project path by replacing "/" with "-".
 # Derive it rather than hardcoding a username and OS layout — the old literal
@@ -171,7 +173,7 @@ STANDBY_FILE = HUD_DIR / "standby.json"
 #       advances to its listen turn. That is SKIP.
 # We speak the socket protocol directly instead of shelling out to
 # `voicemode control ...` because mute is a safety control: a ~0.5s Python
-# CLI cold start sits right on the path whose latency Pat is complaining
+# CLI cold start sits right on the path whose latency the owner is complaining
 # about, and subprocess failure modes are worse than a 0.6s socket timeout.
 CONTROL_SOCKET = Path(
     os.environ.get("VOICEMODE_CONTROL_SOCKET")
@@ -199,24 +201,9 @@ SAYS_FILE = HUD_DIR / "says.json"
 SAYS_STORED = 100   # durability cap, matches inbox_history
 SAYS_SERVED = 50    # feed-payload cap — only the newest slice reaches /state.json
 MAX_EVENTS = 800
-EASTERN = ZoneInfo("America/New_York")
+EASTERN = ZoneInfo(os.environ.get("VOICE_HUD_TZ", "America/New_York"))
 WHISPER_TRANSCRIBE_URL = os.environ.get("VOICE_HUD_WHISPER_URL", "http://127.0.0.1:2022/v1/audio/transcriptions")
 MAX_AUDIO_BYTES = 10_000_000
-# Workspace + user identifiers come from the environment, never the source.
-# Unset means the Asana widgets simply render as unavailable (see asana_get).
-ASANA_WORKSPACE_GID = os.environ.get("ASANA_WORKSPACE_GID", "")
-ASANA_API_BASE = "https://app.asana.com/api/1.0"
-ASANA_CACHE_SECONDS = 300
-# The due-soon widget shows tasks ASSIGNED TO YOU that are past due or due
-# this week — assignee only, never watcher/follower, regardless of project.
-# Sweeping whole boards was tried and reverted: it pulls in tasks you merely
-# watch, which is noise on a glanceable HUD.
-ASANA_USER_GID = os.environ.get("ASANA_USER_GID", "")
-DUE_SOON_CAP = 12  # rows shown; anything past this surfaces as "+N more",
-                    # never silent truncation
-ASSIGNED_PAGE_LIMIT = 100   # Asana max page size
-ASSIGNED_MAX_PAGES = 10     # walk cap: 1000 open assigned tasks is already
-                             # pathological; past this the count is a floor
 
 STATUS_BY_EVENT = {
     "TTS_START": "speaking",
@@ -305,7 +292,7 @@ def send_control(command: str, hint: str = "") -> dict:
 
 
 def cut_speech_for_mute(muted: bool) -> dict:
-    """Going muted CUTS the utterance already in flight (Pat, 08-19: "if I
+    """Going muted CUTS the utterance already in flight (owner, 08-19: "if I
     hit mute when you're in the middle of a conversation, could you please
     stop talking"). Letting the sentence finish is exactly wrong when the
     reason for muting is that someone walked in.
@@ -333,7 +320,7 @@ def cut_speech_for_mute(muted: bool) -> dict:
 
 
 def skip_current_utterance() -> dict:
-    """Cut the in-flight utterance WITHOUT muting (Pat, 08-19: "skip to the
+    """Cut the in-flight utterance WITHOUT muting (owner, 08-19: "skip to the
     end of a sentence when you're speaking ... don't need the full
     playthrough"). skip_forward rather than stop precisely because it
     carries no hint: converse returns an ordinary result and the session
@@ -374,7 +361,7 @@ def read_playback(events: tuple) -> dict:
 def read_listening(events: tuple = ()) -> dict:
     """Whether always_on_listener.py's continuous wake daemon is alive — the
     HUD's always-visible WAKE LISTENER indicator, and what the status line's
-    LISTENING state is actually keyed off of (Pat, 08-17: a false "armed"
+    LISTENING state is actually keyed off of (owner, 08-17: a false "armed"
     reading is worse than none, so the page must say OFFLINE the moment this
     goes stale, never keep claiming armed).
 
@@ -401,13 +388,13 @@ def read_listening(events: tuple = ()) -> dict:
     gate = stored.get("gate")
     peak = stored.get("peak_rms")
     above_gate_ts = stored.get("above_gate_ts") or 0
-    # Ground truth that Pat was speaking, from the OTHER consumer of the same
+    # Ground truth that the owner was speaking, from the OTHER consumer of the same
     # microphone: voicemode's own recorder transcribed something. If it did,
     # and the always-on listener never once reached its usable threshold in
     # that window, the listener missed speech it should have heard — the two
     # processes share a mic, so that is a real fault rather than a quiet
     # room. This cross-check is what makes "below usable level" reportable
-    # WITHOUT false-alarming every time Pat simply isn't talking, which a
+    # WITHOUT false-alarming every time the owner simply isn't talking, which a
     # bare "nothing above the gate lately" test would do constantly.
     heard_elsewhere = max(
         (iso_epoch(e.get("timestamp") or "") or 0
@@ -459,7 +446,7 @@ def read_listening(events: tuple = ()) -> dict:
 
 FINISHED_TTL_SECONDS = 600
 
-# ROUND 2 (2026-08-18, Pat/coordinator caught this): the FIRST version of
+# ROUND 2 (2026-08-18, owner/coordinator caught this): the FIRST version of
 # this fix stamped a `seen` heartbeat on every /tasks POST that touched an
 # item, orphaned-flagged whatever hadn't been touched in a while. That
 # measures how recently the ORCHESTRATOR re-posted the fleet, not whether
@@ -552,7 +539,7 @@ def read_tasks() -> dict:
     """Finished (done/failed) items age off the display after FINISHED_TTL.
     ORPHANED running items (task_liveness found a real probe with no
     evidence of life) age off after one more FINISHED_TTL window past the
-    moment they actually crossed the stale threshold — long enough that Pat
+    moment they actually crossed the stale threshold — long enough that the owner
     sees the ghost, not so long it never leaves. UNKNOWN running items (no
     heartbeat_file at all) are NEVER pruned this way: "no evidence either
     way" is not the same fact as "confirmed gone", and hiding it would just
@@ -705,7 +692,7 @@ def append_say(text: str, persona: str) -> float:
 
 
 STANDBY_IDLE_SECONDS = int(os.environ.get("STANDBY_IDLE_SECONDS", 20 * 60))
-# No manual standby control in the UI (Pat, 08-17 — "listening" vs "muted"
+# No manual standby control in the UI (owner, 08-17 — "listening" vs "muted"
 # are the only two user-facing states now). Standby is a pure background
 # idle timer: no user directive and no assistant activity for this long
 # arms it on its own; any fresher activity clears it. Configurable via env
@@ -742,7 +729,7 @@ def write_standby(standby: bool, since: float) -> None:
 
 
 def read_standby() -> dict:
-    """Auto-idle standby (Pat, 08-17 — replaces the old manual tap-to-sleep
+    """Auto-idle standby (owner, 08-17 — replaces the old manual tap-to-sleep
     UI, which is gone; the endpoint and its persisted state stay for
     background waiters like wake_listener.py). Idle >= STANDBY_IDLE_SECONDS
     (measured from whichever is more recent: real activity, or the last
@@ -855,11 +842,11 @@ def wav_bytes_rms(wav_bytes: bytes) -> float:
 
 
 # ---- comms replay: re-synthesise a spoken line (08-24) ----------------
-# Pat is usually walking around the room while a line is spoken, so the comms
-# feed is where he finds it afterwards -- but the HUD stores no audio, only
+# the owner is usually walking around the room while a line is spoken, so the comms
+# feed is where they finds it afterwards -- but the HUD stores no audio, only
 # text derived from voicemode's event log, so "say that again" was impossible.
 # Replay re-synthesises through the SAME local kokoro that spoke it, in the
-# SAME voice: the personas are how he tells whose finding a line was, and a
+# SAME voice: the personas are how they tells whose finding a line was, and a
 # generic browser SpeechSynthesis voice would erase exactly that.
 KOKORO_BASE = os.environ.get("VOICE_HUD_KOKORO_URL", "http://127.0.0.1:8880/v1")
 KOKORO_SPEECH_URL = f"{KOKORO_BASE}/audio/speech"
@@ -901,7 +888,7 @@ def parse_speed(raw: str) -> float:
 
 def read_tts_speed() -> float:
     """Synthesise a replay at the SAME rate voicemode speaks at, so a 1x
-    replay sounds like the line actually sounded. Pat runs 1.25 today; the
+    replay sounds like the line actually sounded. The owner runs 1.25 today; the
     page's own 1x/1.5x/2x toggle multiplies on top of this via playbackRate,
     which is why this is the base rather than a hardcoded 1.0."""
     return parse_speed(
@@ -932,8 +919,7 @@ def fetch_kokoro_voices() -> tuple:
 
 def kokoro_voices() -> tuple:
     """Cached roster. A failed fetch keeps the last known good rather than
-    emptying it (expiring beats deleting — same discipline as the Asana
-    widgets), so a momentarily-down kokoro can't turn every persona into the
+    emptying it (expiring beats deleting), so a momentarily-down kokoro can't turn every persona into the
     default voice."""
     now = time.time()
     if _kokoro_voices["value"] and now - _kokoro_voices["at"] < KOKORO_VOICES_CACHE_SECONDS:
@@ -977,7 +963,7 @@ def resolve_replay_voice(voice: str, persona: str, roster: tuple) -> str:
 # confirmed" -- measured 2026-08-24 by transcribing a replay back through the
 # local whisper. Markdown emphasis is deliberately NOT stripped: the same
 # measurement showed kokoro already swallows ** and ` silently, so touching
-# them would be unverified meddling with the text he asked to hear again.
+# them would be unverified meddling with the text they asked to hear again.
 UNSPEAKABLE = re.compile(
     "["
     "←-⇿"              # arrows
@@ -1050,7 +1036,7 @@ def cached_speech(text: str, voice: str, speed: float) -> tuple:
     """(mp3 bytes, error, cache_hit). The page keeps its own object-URL cache
     so a second press of the same line never gets here at all; this one is
     what makes replay instant again after a page RELOAD, which is otherwise
-    the common case (Pat reloads the tab after every server restart)."""
+    the common case (the owner reloads the tab after every server restart)."""
     key = (voice, text)
     if key in _replay_clips:
         return (_replay_clips[key], "", True)
@@ -1241,7 +1227,7 @@ def spoken_call_texts() -> tuple:
     of the comms-feed correlation.
 
     WHY THIS NO LONGER USES read_session_lines()'s byte tail (2026-08-18,
-    and this is the "again" in Pat's "showing only 200 characters again"):
+    and this is the "again" in the owner's "showing only 200 characters again"):
     the candidates were harvested from the same fixed-size tail the worklog
     uses, so the repair silently degraded the moment a session's transcript
     outgrew that window. It is not a gentle degradation either, because the
@@ -1319,7 +1305,7 @@ def resolve_spoken_text(candidates: tuple, truncated: str) -> tuple:
     pass it through as-is rather than drop the line, but flag it (third
     tuple element) — this is the "still can't be recovered" case the
     Comms feed must mark rather than silently show as if it were complete
-    (Pat, 08-18: a stale/truncated line rendered identically to a whole one
+    (owner, 08-18: a stale/truncated line rendered identically to a whole one
     is exactly the failure mode this whole pass is about).
 
     Only texts that are ACTUALLY at the truncation length are repaired. A
@@ -1368,7 +1354,7 @@ def correlate_spoken_texts(claude_lines: tuple, candidates: tuple) -> tuple:
 
 
 def typed_entries() -> tuple:
-    """Pat's typed inbox messages, merged into the comms feed with a status chip."""
+    """the owner's typed inbox messages, merged into the comms feed with a status chip."""
     return tuple(
         {
             "who": "typed",
@@ -1415,219 +1401,6 @@ def telemetry(events: tuple) -> dict:
     }
 
 
-def asana_get(path: str, params: dict = None):
-    """GET against the Asana API using the bearer token from env. Returns
-    None on ANY failure — no key, network error, bad JSON — so a widget
-    degrades to unavailable instead of ever raising into build_state().
-    The key is read fresh each call and never logged or echoed back."""
-    key = os.environ.get("ASANA_API_KEY")
-    if not key:
-        return None
-    else:
-        qs = ("?" + urllib.parse.urlencode(params)) if params else ""
-        req = urllib.request.Request(
-            f"{ASANA_API_BASE}{path}{qs}",
-            headers={"Authorization": f"Bearer {key}"},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                return json.loads(resp.read()).get("data")
-        except (urllib.error.URLError, ValueError, OSError):
-            return None
-
-
-def project_tag(projects) -> str:
-    """Short source tag for a due row: the two boards Pat lives in get fixed
-    tags; anything else shows a truncated project name; a task with no
-    project at all gets a quiet dash."""
-    names = tuple((p.get("name") or "") for p in (projects or ()))
-    if any("ETL" in n and "Alert" in n for n in names):
-        return "ETL"
-    elif any("Kanban" in n for n in names):
-        return "KAN"
-    elif names and names[0]:
-        return names[0][:10].upper()
-    else:
-        return "—"
-
-
-def asana_get_raw(path: str, params: dict = None):
-    """asana_get's sibling that keeps the WHOLE response body (needed for
-    next_page pagination tokens, which asana_get discards). Same contract:
-    None on any failure, key read fresh, never logged."""
-    key = os.environ.get("ASANA_API_KEY")
-    if not key:
-        return None
-    else:
-        qs = ("?" + urllib.parse.urlencode(params)) if params else ""
-        req = urllib.request.Request(
-            f"{ASANA_API_BASE}{path}{qs}",
-            headers={"Authorization": f"Bearer {key}"},
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                return json.loads(resp.read())
-        except (urllib.error.URLError, ValueError, OSError):
-            return None
-
-
-def _assigned_params(offset):
-    """GET /tasks page params: every INCOMPLETE task assigned to Pat
-    (completed_since=now is Asana's idiom for that), due-date filtering
-    happens client-side in fetch_due_soon."""
-    return {
-        "assignee": ASANA_USER_GID,
-        "workspace": ASANA_WORKSPACE_GID,
-        "completed_since": "now",
-        "opt_fields": "name,due_on,completed,projects.name",
-        "limit": ASSIGNED_PAGE_LIMIT,
-        **({"offset": offset} if offset else {}),
-    }
-
-
-def fetch_assigned_open_tasks():
-    """All incomplete tasks assigned to Pat, walking pagination to the end
-    (up to ASSIGNED_MAX_PAGES) so the widget's counts are exact rather than
-    a search-API 100-row floor. None if the FIRST page fails (widget reads
-    unavailable); a mid-walk failure returns what was gathered — a partial
-    list beats a blank panel for a 5-min cache window."""
-    def walk(body, acc, pages_left):
-        gathered = acc + tuple(body.get("data") or ())
-        offset = (body.get("next_page") or {}).get("offset")
-        if not offset or pages_left <= 0:
-            return gathered
-        else:
-            nxt = asana_get_raw("/tasks", _assigned_params(offset))
-            return gathered if nxt is None else walk(nxt, gathered, pages_left - 1)
-
-    first = asana_get_raw("/tasks", _assigned_params(None))
-    return None if first is None else walk(first, (), ASSIGNED_MAX_PAGES - 1)
-
-
-def fetch_due_soon() -> dict:
-    """Pat's working filter, corrected 08-19: incomplete tasks WHERE PAT IS
-    THE ASSIGNEE, past due or due this week (through Sunday) — regardless
-    of which project they sit in. Population is the assignee walk above;
-    everything after it is presentation: overdue block first with the
-    freshest slippage on top (a deep backlog of multi-month zombies must
-    not bury yesterday's miss — they still count into `more`), then this
-    week ascending, with up to 4 of the DUE_SOON_CAP rows reserved for this
-    week so overdue volume can never hide today's work entirely."""
-    tasks = fetch_assigned_open_tasks()
-    if tasks is None:
-        return {"items": (), "unavailable": True, "more": 0}
-    else:
-        today = datetime.now(EASTERN).date()
-        week_end = today + timedelta(days=6 - today.weekday())
-        due = {
-            t["gid"]: t
-            for t in tasks
-            if t.get("gid") and t.get("due_on") and not t.get("completed")
-            and t["due_on"] <= week_end.isoformat()
-        }
-        overdue = tuple(sorted(
-            (t for t in due.values() if t["due_on"] < today.isoformat()),
-            key=lambda t: t["due_on"], reverse=True,
-        ))
-        week = tuple(sorted(
-            (t for t in due.values() if t["due_on"] >= today.isoformat()),
-            key=lambda t: t["due_on"],
-        ))
-        week_reserved = min(len(week), 4)
-        overdue_shown = overdue[:DUE_SOON_CAP - week_reserved]
-        week_shown = week[:DUE_SOON_CAP - len(overdue_shown)]
-        items = tuple(
-            {
-                "gid": t["gid"],
-                "name": t.get("name") or "",
-                "due_on": t["due_on"],
-                "days_left": (date.fromisoformat(t["due_on"]) - today).days,
-                "overdue": t["due_on"] < today.isoformat(),
-                "tag": project_tag(t.get("projects")),
-            }
-            for t in overdue_shown + week_shown
-        )
-        return {
-            "items": items,
-            "unavailable": False,
-            "more": max(0, len(overdue) + len(week) - len(items)),
-        }
-
-
-_due_soon_cache = {"at": 0.0, "value": {"items": (), "unavailable": True, "more": 0}}
-
-
-def read_due_soon() -> dict:
-    """Cache wrapper, ~300s TTL — matches read_plans()'s pattern. Exposes
-    both the absolute fetch time (fetched_at) and its epoch (fetched_epoch,
-    08-18) — the epoch is what the page ticks a live "Xm ago" age from and
-    compares against ASANA_CACHE_SECONDS to render amber once this widget is
-    showing data older than its own advertised TTL."""
-    now = time.time()
-    if now - _due_soon_cache["at"] < ASANA_CACHE_SECONDS:
-        return {**_due_soon_cache["value"], "fetched_at": epoch_local_time(_due_soon_cache["at"]), "fetched_epoch": _due_soon_cache["at"]}
-    else:
-        value = fetch_due_soon()
-        _due_soon_cache.update(at=now, value=value)
-        return {**value, "fetched_at": epoch_local_time(now), "fetched_epoch": now}
-
-
-def find_de_kanban_gid():
-    """Resolve the DE Kanban board's project gid via typeahead search."""
-    results = asana_get(
-        f"/workspaces/{ASANA_WORKSPACE_GID}/typeahead",
-        {"resource_type": "project", "query": "Data Engineering Kanban"},
-    ) or ()
-    return results[0]["gid"] if results else None
-
-
-KANBAN_SECTIONS = ("In Progress", "In Review")
-
-
-def kanban_section_summary(section: dict) -> dict:
-    tasks = asana_get(
-        f"/sections/{section['gid']}/tasks", {"opt_fields": "name,completed"}
-    ) or ()
-    open_tasks = tuple(t for t in tasks if not t.get("completed"))
-    return {
-        "name": section.get("name") or "",
-        "count": len(open_tasks),
-        "tickets": tuple(t.get("name") or "" for t in open_tasks[:3]),
-    }
-
-
-def fetch_kanban() -> dict:
-    """DE Kanban board's In Progress + In Review sections, ticket counts +
-    up to 3 ticket names each."""
-    project_gid = find_de_kanban_gid()
-    if project_gid is None:
-        return {"sections": (), "unavailable": True}
-    else:
-        sections = asana_get(f"/projects/{project_gid}/sections")
-        if sections is None:
-            return {"sections": (), "unavailable": True}
-        else:
-            wanted = tuple(
-                s for s in sections if (s.get("name") or "").strip() in KANBAN_SECTIONS
-            )
-            return {"sections": tuple(map(kanban_section_summary, wanted)), "unavailable": False}
-
-
-_kanban_cache = {"at": 0.0, "value": {"sections": (), "unavailable": True}}
-
-
-def read_kanban() -> dict:
-    """Cache wrapper, ~300s TTL — matches read_plans()'s pattern. See
-    read_due_soon() for why fetched_epoch is exposed alongside fetched_at."""
-    now = time.time()
-    if now - _kanban_cache["at"] < ASANA_CACHE_SECONDS:
-        return {**_kanban_cache["value"], "fetched_at": epoch_local_time(_kanban_cache["at"]), "fetched_epoch": _kanban_cache["at"]}
-    else:
-        value = fetch_kanban()
-        _kanban_cache.update(at=now, value=value)
-        return {**value, "fetched_at": epoch_local_time(now), "fetched_epoch": now}
-
-
 def build_state() -> dict:
     session_lines = read_session_lines()
     events = read_events()
@@ -1648,7 +1421,7 @@ def build_state() -> dict:
     plans = read_plans()
     return {
         "status": statuses[-1] if statuses else "standby",
-        # bm_george = Pat's chosen JARVIS voice (08-19): shown as the default
+        # bm_george = the owner's chosen JARVIS voice (08-19): shown as the default
         # before anything has been spoken this session. The REAL voice choice
         # lives in voicemode's own config, never here — this is display-only
         # and is overridden by the actual spoken voice the moment one exists.
@@ -1665,14 +1438,11 @@ def build_state() -> dict:
         # reflected, not the stale value from before it.
         "plans_checked_epoch": _plans_cache["at"],
         "plans_cache_seconds": PLANS_CACHE_SECONDS,
-        "asana_cache_seconds": ASANA_CACHE_SECONDS,
         "heartbeat_stale_seconds": HEARTBEAT_STALE_SECONDS,
         "roster": VOICE_ROSTER,
         "lines": entries[-60:],
         "total": len(entries),
         "telemetry": telemetry(events),
-        "due_soon": read_due_soon(),
-        "kanban": read_kanban(),
         "listening": read_listening(events),
         "playback": read_playback(events),
     }
@@ -1696,7 +1466,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         route = self.path.split("?")[0]
         if route in ("/", "/index.html"):
-            return self._send((HUD_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
+            return self._send((STATIC_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
         elif route == "/state.json":
             return self._send(json.dumps(build_state()).encode(), "application/json")
         elif route == "/voice":
@@ -1724,7 +1494,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _handle_inbox_audio(self, length: int):
         """Same noise guard as always_on_listener.py's ambient wake path
-        (Pat, 08-17 — whisper hallucinated "Thank you." on a dead-mic
+        (owner, 08-17 — whisper hallucinated "Thank you." on a dead-mic
         recording and it got enqueued as a directive, twice): reject
         near-silent uploads before they reach whisper at all, and reject a
         transcript that's a stock hallucination or too short to be a real
@@ -1751,7 +1521,7 @@ class Handler(BaseHTTPRequestHandler):
                 # Rejected dictation is deliberately NOT enqueued, but
                 # dictation_outcome reports the transcript AND the tier and
                 # reason that rejected it, so the rejection is distinguishable
-                # from having heard nothing — and says which tier, so Pat can
+                # from having heard nothing — and says which tier, so the owner can
                 # tell a stock filler phrase from a confidence-floor reject
                 # without going to the log.
                 enqueue_inbox_text(text) if verdict.accept else None
@@ -1760,8 +1530,8 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_replay(self, payload: dict):
         """Re-synthesise one comms line for playback in the page.
 
-        MUTE IS ENFORCED HERE, not only in the page. Quiet mode is Pat's
-        meeting-safety control and his stated number-one requirement, so a
+        MUTE IS ENFORCED HERE, not only in the page. Quiet mode is the owner's
+        meeting-safety control and their stated number-one requirement, so a
         replay button must never be a route around it: while mute.json says
         muted this refuses to produce audio at all, 409. (The page also
         refuses to PLAY while muted, and pauses a replay the moment mute
@@ -1825,18 +1595,6 @@ class Handler(BaseHTTPRequestHandler):
             MUTE_FILE.write_text(json.dumps({"muted": muted}))
             cut_speech_for_mute(muted)
             return self._send(json.dumps({"ok": True, "muted": muted}).encode(), "application/json")
-        elif route == "/asana/refresh":
-            # Force the next read of the Asana widgets to go to the API rather
-            # than serve the ~300s cache. Needed because the agent side of this
-            # session CLOSES tickets and CLEARS due dates, so the widget can sit
-            # up to five minutes advertising work that is already done — Pat
-            # caught exactly that (08-24) with three closed tickets still
-            # showing as overdue. Expiring beats deleting: the stale value stays
-            # readable if the very next fetch fails, so a refresh can never turn
-            # a populated panel into an empty one.
-            _due_soon_cache["at"] = 0.0
-            _kanban_cache["at"] = 0.0
-            return self._send(json.dumps({"ok": True, "expired": ["due_soon", "kanban"]}).encode(), "application/json")
         elif route == "/skip":
             skipped = skip_current_utterance()
             return self._send(

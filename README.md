@@ -1,94 +1,150 @@
 # voice-hud
 
-A local, always-on voice assistant and glanceable heads-up display. Wake word,
-speech-to-text, spoken responses, and a browser HUD showing current work,
-inbox, and due items.
+A local, always-on voice loop for a [Claude Code](https://claude.com/claude-code)
+session, with a glanceable browser HUD. A wake-word listener owns the
+microphone, a stdlib-only HTTP server derives live state from
+[voicemode](https://github.com/mbailey/voicemode)'s event log and serves the
+page, and the page shows what the session is saying, what it is running, and
+whether anything is actually listening.
 
-Everything runs on localhost. Nothing is sent anywhere except the optional
-task-tracker integration, and that is off unless you configure it.
+Everything runs on localhost. Nothing leaves the machine except calls to the
+speech services you point it at (Whisper-compatible STT, Kokoro-compatible
+TTS), which default to localhost too.
 
-## Pieces
+## How it fits together
 
-| File | Role |
+```
+ mic ─▶ always_on_listener ─▶ Whisper (STT) ─▶ wake_guard ─▶ POST /inbox ─▶ Claude Code
+              │ heartbeat                                          ▲          session polls
+              ▼                                                    │          /inbox, /mute
+           server  ◀── ~/.voicemode/logs/events/*.jsonl            │
+              │                                                    │
+              ▼                                                    │
+      static/index.html (HUD on :8123) ── typed / dictated directives
+                       └─▶ Kokoro (TTS) to replay a spoken line
+```
+
+| Path | Role |
 |---|---|
-| `server.py` | HUD web server + API on `:8123`; renders `index.html` |
-| `always_on_listener.py` | Continuous capture, wake-word gating, transcription |
-| `wake_guard.py` | Wake-word decision logic (+ `test_wake_guard.py`) |
-| `calibrate_gate.py` | Tunes the wake gate against your room and mic |
-| `wake_listener.py` | Thin wake-only listener |
-| `inbox_watcher.sh` | Watches the inbox file and notifies |
-| `ensure_a2dp.sh` | Forces Bluetooth headsets back to A2DP (macOS) |
+| `voice_hud/server.py` | HTTP server on `127.0.0.1:8123`. Serves the HUD, exposes the API below, derives status (speaking / listening / standby) from voicemode's event log. Stdlib only. |
+| `voice_hud/always_on_listener.py` | Continuous capture, energy gate, wake-phrase match, transcription of what follows, POST to the inbox. Writes a heartbeat carrying capture evidence so the HUD can tell "alive" from "can actually hear". |
+| `voice_hud/wake_guard.py` | The tiered directive gate that keeps Whisper's hallucinated filler ("Thank you.") out of the inbox. Pure decision logic, covered by `tests/`. |
+| `voice_hud/calibrate_gate.py` | Measures the gate's acoustic thresholds against your room and microphone. |
+| `voice_hud/wake_listener.py` | The older standby-only listener, kept for reference. |
+| `voice_hud/static/index.html` | The HUD. One file, no build step. |
+| `scripts/launch.sh` | Idempotent: start the server if it is down, open the page once per session. Meant to run as a Claude Code hook (below). |
+| `scripts/inbox_watcher.sh` | Blocks until a directive lands in the inbox, then exits with it on stdout. Run it as a backgrounded shell call to turn the pull-queue into a push. |
+| `scripts/ensure_a2dp.sh` | macOS: re-select the preferred Bluetooth headset and bounce it out of HFP before a voice turn. |
+| `scripts/sitecustomize-portaudio-latency.py` | Drop into voicemode's site-packages to default PortAudio to high latency on docks that crackle. |
+| `deploy/systemd/` | User units supervising the server and the listener on Linux. |
+| `deploy/launchd/` | The equivalent launchd plist for macOS. |
 
-## Dependencies
+## Requirements
 
-Local services, expected on these ports:
+- Python 3.12+. The server needs nothing else; the listener needs
+  `sounddevice` and `numpy` (and `libportaudio2` on Linux).
+- Whisper-compatible STT at `VOICE_HUD_WHISPER_URL` and Kokoro-compatible TTS
+  at `VOICE_HUD_KOKORO_URL`. voicemode's installers (`voicemode whisper
+  install`, `voicemode kokoro install`) provide both on the default ports.
+- voicemode itself, for the conversation. The HUD reads its event log and
+  talks to its control socket to cut or skip speech.
 
-- **Whisper** STT at `127.0.0.1:2022`
-- **Kokoro** TTS at `127.0.0.1:8880`
-- `voicemode` event logs at `~/.voicemode/logs/events/`
+## Install
 
-Python: `sounddevice`, `numpy`. Everything else is stdlib.
-
-## Configuration
-
-All optional. Unset means the feature quietly disables itself rather than
-erroring.
-
-| Env var | Effect |
-|---|---|
-| `ASANA_API_KEY` | Enables the task widgets. Unset → they render "unavailable" |
-| `ASANA_WORKSPACE_GID` | Workspace to query |
-| `ASANA_USER_GID` | Whose assigned tasks the due-soon widget shows |
-| `VOICE_HUD_WATCH_PROJECT` | Project dir whose Claude Code sessions feed the worklog (default `~/repos`) |
-
-No identifiers are hardcoded. The tracker integration is generic — it matches
-on project *names*, so it works against any workspace.
-
-## Platform status
-
-Written on macOS, now running on **Linux** (Ubuntu, GNOME/Wayland, PipeWire)
-as well. The core (server, listener, wake guard, HUD) is portable; the
-launchers pick their platform at runtime:
-
-| Piece | macOS | Linux |
-|---|---|---|
-| Listener supervisor | `com.voicemode.always-on-listener.plist` (launchd) | `systemd/voice-hud-listener.service` (systemd --user) |
-| HUD server | started by `launch.sh` via nohup | `systemd/voice-hud-server.service`; `launch.sh` starts the unit if it is down |
-| Browser open | `open -a "Brave Browser"` | `brave-browser`, then `xdg-open` |
-| HUD "spawn session" button | iTerm via osascript | Ptyxis, then `x-terminal-emulator` |
-| Bluetooth A2DP guard | `ensure_a2dp.sh` (SwitchAudioSource) | no-op — PipeWire/WirePlumber keeps A2DP itself; revisit if a headset drops to HFP |
-
-### Linux install
+### Linux (systemd --user)
 
 ```bash
 sudo apt install libportaudio2 ffmpeg
-cd ~/repos/voice-hud && uv venv && uv pip install sounddevice numpy
+git clone https://github.com/ppfenning/voice-hud ~/repos/voice-hud
+cd ~/repos/voice-hud
+uv venv && uv pip install -e ".[listener]"
 mkdir -p ~/.config/systemd/user
-cp systemd/*.service ~/.config/systemd/user/
+cp deploy/systemd/*.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now voice-hud-server voice-hud-listener
 systemctl --user status voice-hud-listener      # must be active, or nothing is listening
 ```
 
-Whisper and Kokoro come from voicemode's own service installers
-(`voicemode whisper install --use-gpu`, `voicemode kokoro install`), which
-register their own user units on the same ports this HUD expects.
+The units assume the checkout lives at `~/repos/voice-hud` and that the
+listener's venv is `.venv/` inside it; edit `WorkingDirectory` and
+`ExecStart` otherwise.
 
-### Pointing at remote STT/TTS
+### macOS (launchd)
 
-Both endpoints are env-overridable, so the speech services can live on
-another host (a homelab box, say) while the listener and HUD stay wherever
-the microphone is:
+Fill in the placeholders in `deploy/launchd/com.voicemode.always-on-listener.plist`
+(`__VOICE_HUD_DIR__` is the checkout, `__VOICEMODE_PYTHON__` any python with
+`sounddevice` and `numpy`), copy it to `~/Library/LaunchAgents/`, and
+`launchctl bootstrap gui/$(id -u) <that path>`. The server is started by
+`scripts/launch.sh` on demand, or by hand with `python3 -m voice_hud.server`.
 
-| Env var | Default |
-|---|---|
-| `VOICE_HUD_WHISPER_URL` | `http://127.0.0.1:2022/v1/audio/transcriptions` |
-| `VOICE_HUD_KOKORO_URL` | `http://127.0.0.1:8880/v1` |
+### Open the HUD with every voice turn
 
-Set them in the systemd units (`Environment=`) or the launchd plist. voicemode
-has its own equivalents (`VOICEMODE_STT_BASE_URLS`, `VOICEMODE_TTS_BASE_URLS`)
-that must be set alongside, or the HUD and the conversation will use different
+Add a Claude Code `PreToolUse` hook on voicemode's converse tool. In
+`~/.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "mcp__.*voicemode.*__converse",
+        "hooks": [{ "type": "command", "command": "$HOME/repos/voice-hud/scripts/launch.sh" }]
+      }
+    ]
+  }
+}
+```
+
+## Configuration
+
+All optional. Unset means the default, never an error.
+
+| Env var | Default | Effect |
+|---|---|---|
+| `VOICE_HUD_STATE_DIR` | `~/.local/state/voice-hud` | Where runtime state lives: flags, inbox, heartbeat, pid files. Safe to delete. |
+| `VOICE_HUD_WATCH_PROJECT` | `~/repos` | Project directory whose Claude Code sessions feed the worklog panel. |
+| `VOICE_HUD_WHISPER_URL` | `http://127.0.0.1:2022/v1/audio/transcriptions` | STT endpoint (listener, server, calibrator). |
+| `VOICE_HUD_KOKORO_URL` | `http://127.0.0.1:8880/v1` | TTS endpoint, used to replay comms lines. |
+| `VOICE_HUD_TZ` | `America/New_York` | Timezone for the timestamps the HUD shows. |
+| `VOICE_HUD_HEADSET` | unset | macOS only: the output device `ensure_a2dp.sh` re-selects before a voice turn. |
+| `VOICEHUD_DIRECTIVE_GATE` | `full` | `off` keeps only the legacy phrase blocklist, `heuristic` skips the LLM tier. Writing `{"mode": ...}` to `gate_mode.json` in the state dir does the same for an already-running listener. |
+| `STANDBY_IDLE_SECONDS` | see `server.py` | Idle time before the session is auto-marked standby. |
+| `VOICEMODE_CONTROL_SOCKET`, `VOICEMODE_TTS_SPEED` | voicemode's | Passed through so cut/skip and replay match the live conversation. |
+
+If the speech services live on another host, set the two URL variables in the
+units or the plist **and** voicemode's own `VOICEMODE_STT_BASE_URLS` /
+`VOICEMODE_TTS_BASE_URLS`, or the HUD and the conversation will use different
 servers.
+
+## HTTP API
+
+The full contract, with the reasoning behind each field, is the docstring at
+the top of `voice_hud/server.py`. In short:
+
+| Route | Purpose |
+|---|---|
+| `GET /` | The HUD. |
+| `GET /state.json` | Everything the page renders: status, current voice, comms lines, telemetry, active ops, listener heartbeat, playback. |
+| `GET/POST /mute` | Quiet mode. Muted means no TTS **and** no listening; the server enforces it, not just the page. |
+| `GET/POST /standby` | Idle flag for background waiters. |
+| `GET/POST /tasks` | The "active ops" list a session publishes about its agents, with server-side liveness probing via each item's `heartbeat_file`. |
+| `GET/POST /inbox`, `POST /inbox/clear` | Directives from the page or the wake listener; the session polls before each turn. |
+| `POST /inbox/audio` | A WAV body: rejected as silence or filler by the same gate as the ambient wake, otherwise transcribed and queued. |
+| `POST /say` | Append a text-only assistant line while muted. |
+| `POST /replay` | Re-synthesise one comms line through Kokoro and return it as audio. Refuses while muted. |
+| `POST /skip` | Cut the utterance being spoken right now without muting. |
+| `POST /spawn` | Open a terminal running a plain-text Claude session. |
+| `GET /health` | `ok`. |
+
+## Development
+
+```bash
+uv venv && uv pip install -e ".[dev]"
+pytest -q
+```
+
+The wake guard's tests are pure and offline; the handful that exercise the
+transcription tier skip themselves when no Whisper server answers.
 
 ## License
 

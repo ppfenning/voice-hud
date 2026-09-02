@@ -21,7 +21,7 @@ import time
 
 import pytest
 
-import wake_guard as wg
+from voice_hud import wake_guard as wg
 
 
 # --------------------------------------------------------------------------
@@ -62,8 +62,8 @@ REAL_DIRECTIVES = (
 # Terse real commands. Every one of these was REJECTED by the first cut of
 # this gate: content_words() ate the object pronoun as filler, the utterance
 # fell under the two-content-word bar, reached tier 3, and `claude -p`
-# answered NO to "stop it". On the wake path that means Pat gets a
-# hearing-you ack while his command is dropped — and "stop" is the single
+# answered NO to "stop it". On the wake path that means the owner gets a
+# hearing-you ack while their command is dropped — and "stop" is the single
 # worst command to lose. A bare imperative verb IS a complete directive.
 TERSE_COMMANDS = (
     "stop", "stop it", "do it", "cancel that", "hold on", "read it",
@@ -167,7 +167,7 @@ class TestGateModeFile:
         assert wg.resolve_gate_mode({}, tmp_path) == wg.DEFAULT_GATE_MODE
 
     def test_the_documented_one_liner_actually_works(self, tmp_path):
-        # This is the exact shape the module docstring tells Pat to write.
+        # This is the exact shape the module docstring tells the owner to write.
         path = tmp_path / "gate_mode.json"
         path.write_text('{"mode":"off"}')
         assert wg.resolve_gate_mode({}, path) == wg.GATE_OFF
@@ -385,7 +385,7 @@ class TestHeartbeatKeepalive:
     """P1-a: the LLM call runs INLINE on the daemon's single listen loop. At
     8s with no heartbeat, plus whisper's 20s, the HUD's own liveness check
     (LISTENING_ALIVE_SECONDS = 15) flips the listener to OFFLINE while it is
-    perfectly healthy — degrading the one indicator Pat uses to spot
+    perfectly healthy — degrading the one indicator the owner uses to spot
     deafness. The gate must keep the heartbeat beating while it waits."""
 
     def test_keepalive_is_called_before_during_and_after(self):
@@ -514,7 +514,7 @@ class TestDictationOutcome:
 class TestSilenceIsNotAGateRejection:
     """08-24: the HUD rendered EVERY non-accepted dictation as "no speech
     detected", so a gate rejection looked like a dead microphone and sent
-    Pat to check his hardware. The API had to carry enough to tell the two
+    the owner to check their hardware. The API had to carry enough to tell the two
     apart before index.html could label them apart — these are the three
     outcomes the page now renders differently."""
 

@@ -29,9 +29,9 @@ function while KEEPING it as the floor, in four tiers, cheapest first:
 
 THE OFF SWITCH, without a terminal and without a restart:
 
-    echo '{"mode":"off"}' > ~/repos/voice-hud/gate_mode.json   # legacy only
-    echo '{"mode":"heuristic"}' > ~/repos/voice-hud/gate_mode.json  # no LLM
-    rm ~/repos/voice-hud/gate_mode.json                        # back to default
+    echo '{"mode":"off"}' > ~/.local/state/voice-hud/gate_mode.json   # legacy only
+    echo '{"mode":"heuristic"}' > ~/.local/state/voice-hud/gate_mode.json  # no LLM
+    rm ~/.local/state/voice-hud/gate_mode.json                        # back to default
 
 It is read per decision, so it takes effect on the very next utterance.
 VOICEHUD_DIRECTIVE_GATE still overrides it where it is set. An env var
@@ -74,6 +74,8 @@ import subprocess
 import time
 from pathlib import Path
 from types import MappingProxyType
+
+from voice_hud.paths import STATE_DIR
 from typing import Any, Mapping, NamedTuple, Optional
 
 RMS_GATE = 0.006  # normalized RMS below this = ambient noise/near-silence;
@@ -81,7 +83,7 @@ RMS_GATE = 0.006  # normalized RMS below this = ambient noise/near-silence;
                    # (stdlib, uploaded WAV) skip whisper entirely below this
 
 # The principle: a directive with no imperative content is not a directive.
-# A bare pleasantry is never a real instruction from Pat — confirmed 08-17
+# A bare pleasantry is never a real instruction from the owner — confirmed 08-17
 # ("whether it be a queued message or a text-based message, I'm never just
 # going to say thank you period") — so these match with confidence, not as a
 # hedge. Below is whisper's stock output on near-silence/background noise —
@@ -92,7 +94,7 @@ RMS_GATE = 0.006  # normalized RMS below this = ambient noise/near-silence;
 # incoming transcript, not on this list — e.g. "amara.org" is stored as
 # "amaraorg" since strip_punct() would turn the transcript's "amara.org"
 # into that. It's fine to be a little aggressive here: a false negative
-# costs Pat a repeat; a false positive wakes the session for nothing.
+# costs the owner a repeat; a false positive wakes the session for nothing.
 #
 # This list is no longer the WHOLE guard — judge_directive() generalizes
 # past it — but it is still the floor, and it is still the thing that runs
@@ -110,22 +112,22 @@ MIN_DIRECTIVE_WORDS = 2  # a real request is at least a couple of words —
 # ---------------------------------------------------------------------------
 # Feature flag. One env var, three settings, and `off` is EXACTLY the
 # behaviour that shipped before 2026-08-21 — so if the gate misbehaves while
-# Pat is away from a terminal, one variable restores the known-good daemon
+# the owner is away from a terminal, one variable restores the known-good daemon
 # without editing or reverting any code.
 # ---------------------------------------------------------------------------
 # THE OFF SWITCH LIVES ON DISK, not only in the environment. An env var
 # cannot be set on an ALREADY-RUNNING process, and the launchd plist only
 # sets PATH — so an env-only flag would have meant editing the plist and
-# doing a bootout/bootstrap, which is exactly the "Pat is away from a
+# doing a bootout/bootstrap, which is exactly the "the owner is away from a
 # terminal" case the flag exists for. Same idea as mute.json:
 #
-#     echo '{"mode":"off"}' > ~/repos/voice-hud/gate_mode.json
+#     echo '{"mode":"off"}' > ~/.local/state/voice-hud/gate_mode.json
 #
 # takes effect on the very next utterance, no restart. Delete the file to
 # go back to the default. The env var still wins where it IS set, for
 # one-off runs and tests.
 GATE_MODE_ENV = "VOICEHUD_DIRECTIVE_GATE"
-GATE_MODE_FILE = Path(__file__).resolve().parent / "gate_mode.json"
+GATE_MODE_FILE = STATE_DIR / "gate_mode.json"
 GATE_OFF = "off"              # legacy blocklist only
 GATE_HEURISTIC = "heuristic"  # tiers 0-2, never spawns claude
 GATE_LLM = "llm"              # tiers 0-3, the full gate
@@ -142,7 +144,7 @@ LANG_PROB_FLOOR = 0.70
 # Worst measured positive 0.981, best measured negative 0.468. 0.70 leaves
 # 0.28 of headroom under the quietest, noisiest real speech tested and 0.23
 # over the most speech-like noise tested. Note the positives were Kokoro TTS
-# degraded synthetically, NOT Pat's own voice through his own headset — the
+# degraded synthetically, NOT the owner's own voice through their own headset — the
 # margin is deliberately fat because that gap is untested.
 
 SEGMENT_END_RATIO_CEILING = 1.5
@@ -176,8 +178,8 @@ LLM_KEEPALIVE_SECONDS = 0.5
 # also a DEAFNESS budget — and worse, it used to be a blindness budget too:
 # server.py calls a listener dead after LISTENING_ALIVE_SECONDS = 15 without
 # a heartbeat, and 8s of silent subprocess wait stacked on whisper's 20s
-# timeout would have shown Pat an OFFLINE listener that was perfectly fine.
-# That is the exact indicator he uses to detect deafness, so the wait now
+# timeout would have shown the owner an OFFLINE listener that was perfectly fine.
+# That is the exact indicator they uses to detect deafness, so the wait now
 # ticks a keepalive every LLM_KEEPALIVE_SECONDS instead of going quiet.
 
 # MCP servers are switched OFF for this call. It needs no tools to answer a
@@ -199,7 +201,7 @@ LLM_COMMAND = (
 # filler and so scored "stop it", "do it", "cancel that", "hold on" and
 # "go on" below the two-content-word bar — sending real commands to tier 3,
 # where `claude -p` answered NO to "stop it". On the wake path that means
-# Pat gets a hearing-you ack while his command is dropped, and "stop" is the
+# the owner gets a hearing-you ack while their command is dropped, and "stop" is the
 # single worst command in the vocabulary to lose.
 #
 # The fix is structural, not a list of rescued phrases: FILLER_WORDS is
@@ -635,7 +637,7 @@ def _verdict(accept: bool, tier: str, reason: str, text: str, signals: Any, mode
 
 def judge_directive(text: str, signals: Any = None, mode: Optional[str] = None,
                     ask=None, keepalive=None) -> Verdict:
-    """Should this transcript be posted to Pat's session as a directive?
+    """Should this transcript be posted to the owner's session as a directive?
 
     Returns a Verdict rather than a bare bool so the caller can log WHY —
     a false positive that cannot be diagnosed will be re-litigated forever.
@@ -678,8 +680,8 @@ def _adjudicate(text: str, signals: Any, mode: str, ask, keepalive) -> Verdict:
     slow, missing or confused hands the decision straight back to the
     floor, which is where the decision lived before this module grew tiers.
     Note the fallback ACCEPTS anything the floor does not reject — on
-    ambiguity this gate leans toward interrupting Pat rather than ignoring
-    him, because a dropped command is unrecoverable and a stray "thank you"
+    ambiguity this gate leans toward interrupting the owner rather than ignoring
+    them, because a dropped command is unrecoverable and a stray "thank you"
     is not."""
     answer = _safe_ask(ask, text, keepalive)
     if answer is True:
@@ -733,7 +735,7 @@ def dictation_outcome(verdict: Verdict) -> dict:
     it noise" stopped looking like "I heard nothing". That was not enough:
     the browser still had no way to say WHY, so index.html collapsed every
     non-accepted outcome into "no speech detected" — which reads as a dead
-    microphone and sends Pat to check his hardware when the real answer was
+    microphone and sends the owner to check their hardware when the real answer was
     a language_probability floor or a stock filler phrase. Two states with
     completely different fixes must not share a label, so tier and reason —
     the same two fields describe() already logs — now ride along in the

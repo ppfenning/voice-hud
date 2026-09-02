@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# Make sure Pat's headphones are BOTH selected and in A2DP before a voice turn.
+# Make sure the preferred Bluetooth headset is BOTH selected and in A2DP before
+# a voice turn (macOS; a no-op elsewhere — PipeWire/WirePlumber keeps A2DP itself).
 #
-# Two failures this guards, both hit repeatedly on 2026-08-24:
+# Two failures this guards, both hit repeatedly in practice:
 #
-#  1. WRONG DEVICE. Pat: "please pass all vocals through the Amiron, that's my
-#     main headphone, so if you don't talk through there I can't even hear you."
-#     Anything -- a disconnect, a dock event, this script's own renegotiation --
-#     can leave the default output somewhere else, and he is often walking around
-#     and not looking at the screen, so he has no way to notice.
+#  1. WRONG DEVICE. Anything -- a disconnect, a dock event, this script's own
+#     renegotiation -- can leave the default output somewhere other than the
+#     headset, and a user who is walking around and not looking at the screen
+#     has no way to notice. Set VOICE_HUD_HEADSET to the device name
+#     SwitchAudioSource reports and it is re-selected automatically.
 #
-#  2. WRONG PROFILE. The Amiron slid into HFP (hands-free) three separate times.
-#     In HFP it enumerates as 1 channel / 16000 Hz and voicemode opens a 24 kHz
-#     Kokoro stream against it, so he hears distortion or nothing -- while every
+#  2. WRONG PROFILE. A headset can slide into HFP (hands-free). In HFP it
+#     enumerates as 1 channel / 16000 Hz and voicemode opens a 24 kHz Kokoro
+#     stream against it, so the user hears distortion or nothing -- while every
 #     layer reports success.
 #
 # The diagnostic for (2) is PortAudio's device table, NOT SwitchAudioSource: the
@@ -22,7 +23,7 @@
 # never be the reason a voice turn fails to start.
 set -u
 
-PREFERRED="Amiron wireless"
+PREFERRED="${VOICE_HUD_HEADSET:-}"
 
 command -v SwitchAudioSource >/dev/null 2>&1 || exit 0
 PY="$HOME/.local/share/uv/tools/voice-mode/bin/python"
@@ -46,8 +47,8 @@ PYEOF
 
 AVAILABLE=$(SwitchAudioSource -a -t output 2>/dev/null) || exit 0
 
-# (1) If the preferred headset is connected but not selected, select it.
-if printf '%s\n' "$AVAILABLE" | grep -qF "$PREFERRED"; then
+# (1) If a preferred headset is configured and connected but not selected, select it.
+if [ -n "$PREFERRED" ] && printf '%s\n' "$AVAILABLE" | grep -qF "$PREFERRED"; then
   CURRENT=$(SwitchAudioSource -c -t output 2>/dev/null)
   if [ "$CURRENT" != "$PREFERRED" ]; then
     SwitchAudioSource -s "$PREFERRED" -t output >/dev/null 2>&1 && sleep 1
@@ -57,7 +58,7 @@ fi
 
 CURRENT=$(SwitchAudioSource -c -t output 2>/dev/null) || exit 0
 case "$CURRENT" in
-  *Amiron*|*AirPods*|*Buds*) ;;   # bluetooth: profile can be wrong
+  *AirPods*|*Buds*|*[Ww]ireless*|"$PREFERRED") ;;   # bluetooth: profile can be wrong
   *) exit 0 ;;                     # wired/built-in: HFP cannot apply
 esac
 
@@ -71,7 +72,7 @@ sleep 1
 SwitchAudioSource -s "$CURRENT" -t output >/dev/null 2>&1
 sleep 2
 
-# Never leave him on the fallback, whatever happened above.
+# Never leave the user on the fallback, whatever happened above.
 NOW=$(SwitchAudioSource -c -t output 2>/dev/null)
 [ "$NOW" = "$CURRENT" ] || SwitchAudioSource -s "$CURRENT" -t output >/dev/null 2>&1
 

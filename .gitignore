@@ -1,9 +1,17 @@
 __pycache__/
 *.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
 .DS_Store
 *:Zone.Identifier
 
-# Runtime state — churns constantly, machine-local
+# Local python env for the listener (sounddevice + numpy)
+.venv/
+
+# Runtime state lives under $VOICE_HUD_STATE_DIR (default ~/.local/state/voice-hud),
+# never in the checkout. These patterns only matter if you point it back here.
 tasks.json
 standby.json
 mute.json
@@ -18,6 +26,3 @@ says.json
 
 # macOS-only launchers, if you keep local unshared copies
 *.applescript
-
-# Local python env for the listener (sounddevice + numpy)
-.venv/

@@ -1,7 +1,9 @@
 # voice-hud HUD server on 127.0.0.1:8123 — stdlib only, system python.
-# Install (repo copy is the source of truth; the live file is a plain copy):
+# The checkout is assumed to live at ~/repos/voice-hud; edit the two paths
+# below otherwise. The repo copy is the source of truth; the live file is a
+# plain copy:
 #   mkdir -p ~/.config/systemd/user
-#   cp ~/repos/voice-hud/systemd/voice-hud-server.service ~/.config/systemd/user/
+#   cp deploy/systemd/voice-hud-server.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload && systemctl --user enable --now voice-hud-server
 [Unit]
 Description=voice-hud server (:8123)
@@ -10,7 +12,7 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=%h/repos/voice-hud
-ExecStart=/usr/bin/python3 %h/repos/voice-hud/server.py
+ExecStart=/usr/bin/python3 -m voice_hud.server
 Environment=VOICE_HUD_WATCH_PROJECT=%h/repos
 Restart=always
 RestartSec=3

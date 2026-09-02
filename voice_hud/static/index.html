@@ -110,11 +110,11 @@
 
   /* ambient screensaver — after 5 idle minutes everything dims to a clock */
   body { transition: transform 4s ease; }
-  .feed, .voices, .ops, #plans, .asana-widget, .readout, .mute-btn, .status-line, .corner, .stats {
+  .feed, .voices, .ops, #plans, .readout, .mute-btn, .status-line, .corner, .stats {
     transition: opacity 2s ease;
   }
   body.ambient .feed, body.ambient .voices, body.ambient .ops, body.ambient #plans,
-  body.ambient .asana-widget, body.ambient .readout, body.ambient .mute-btn,
+  body.ambient .readout, body.ambient .mute-btn,
   body.ambient .status-line, body.ambient .corner, body.ambient .stats { opacity: .12; }
   #ambientClock {
     position: absolute; top: 15%; left: 50%; transform: translateX(-50%);
@@ -129,7 +129,7 @@
     position: absolute; top: 88px; left: 50%; transform: translateX(-50%);
     display: flex; gap: 2.8rem; z-index: 2; text-align: center;
   }
-  /* stat row stays CYAN in every theme (Pat) — literal values, not theme vars
+  /* stat row stays CYAN in every theme (owner) — literal values, not theme vars
      (literals updated to the arc-reactor blue on the 08-19 JARVIS pass) */
   .stats .n {
     font-size: 54px; font-weight: 700; line-height: 1; color: #4fc3f7;
@@ -176,7 +176,7 @@
   /* always-on wake listener indicator: ARMED (cyan, matches readout default)
      = always_on_listener.py's heartbeat is fresh; OFFLINE (red) = the daemon
      isn't running or hasn't checked in — this is what the status line's
-     resting LISTENING state is honest about (Pat, 08-17: a false "armed"
+     resting LISTENING state is honest about (owner, 08-17: a false "armed"
      reading is worse than none) */
   #roListening.offline { color: var(--red); text-shadow: 0 0 8px rgba(255,59,48,.5); }
   #roListening.degraded { color: var(--amber); text-shadow: 0 0 8px rgba(255,196,107,.55); }
@@ -188,7 +188,7 @@
   #ro-bl { bottom: 30px; left: 34px; }
   #ro-br { bottom: 30px; right: 34px; text-align: right; }
 
-  /* status line — the two user-facing states (Pat, 08-17): LISTENING is the
+  /* status line — the two user-facing states (owner, 08-17): LISTENING is the
      default resting state, always an invitation to speak; MUTED is the hard
      off. Everything else (speaking/hearing/processing/working) is activity
      indication layered on top of "still listening", never a mode that
@@ -263,7 +263,7 @@
   .voices button.pending { color: var(--amber); border-color: var(--amber); }
   .voices .cmd-note { font-size: .54rem; letter-spacing: .08em; color: var(--cyan-dim); opacity: .65; }
 
-  /* bottom-left commands panel — pulled OUT of the settings drawer (Pat,
+  /* bottom-left commands panel — pulled OUT of the settings drawer (the owner,
      08-17) so it's ALWAYS visible/clickable, not gated behind ⚙. Fixed,
      static content (5 buttons, unlike the dynamic voice roster) so its
      rendered height is knowable (~188px): anchors the corner at the same
@@ -285,7 +285,7 @@
      settings drawer is open: the drawer (#voices) is also left-anchored and
      vertically centered at the SAME z-index, so without this a tall stack
      paints over the drawer's buttons (later in DOM order wins the tie) and
-     eats its clicks — this is the overlap Pat hit. */
+     eats its clicks — this is the overlap the owner hit. */
   .left-stack {
     position: absolute; left: 34px; bottom: 340px; z-index: 3;
     display: flex; flex-direction: column; gap: .6rem; max-width: 230px;
@@ -296,7 +296,7 @@
   .voices.stacked { position: static; left: auto; top: auto; bottom: auto; transform: none; }
 
   /* ---- right rail: ONE bounded column (08-19 overlap fix) ----
-     WHAT WAS ACTUALLY WRONG: the due/overdue + kanban stack, the ops panel,
+     WHAT WAS ACTUALLY WRONG: the side widgets, the ops panel,
      and the spawn controls were three INDEPENDENTLY absolutely-positioned
      siblings anchored to three different reference points — top:96px,
      top:50% (centred), and bottom:96px — each with a hand-tuned vh cap.
@@ -306,7 +306,7 @@
      it overlaps at EVERY size, it just wasn't visible until the widgets
      grew tall enough to fill their band, which is what the 7-item fleet
      did). .ops is later in DOM at the same z-index, so it painted straight
-     over the kanban and due lists.
+     over the widgets above it.
      THE FIX: no more competing anchors. One rail spans the available height
      and the three panels are ordinary flow children of a flex column, so
      the layout engine — not arithmetic in a comment — guarantees they can
@@ -324,7 +324,7 @@
        readout. Measured: at a 300px rail the last child escaped by design
        before this line existed. Scrolling the whole rail is the honest
        out — everything stays legible, nothing overlaps, and the rail
-       itself scrolls only in a window far shorter than Pat ever uses. */
+       itself scrolls only in a window far shorter than the owner ever uses. */
     overflow-y: auto; overflow-x: hidden;
   }
   .right-rail::-webkit-scrollbar { width: 4px; }
@@ -332,28 +332,16 @@
   .right-rail > * { min-height: 0; overflow-y: auto; overflow-x: hidden; }
   .right-rail > *::-webkit-scrollbar { width: 4px; }
   .right-rail > *::-webkit-scrollbar-thumb { background: var(--cyan-dim); }
-  /* Reading priority when space is tight (Pat glances for what's RUNNING and
-     what's OVERDUE): ops takes the leftover space and never shrinks below a
-     legible 6rem; due/overdue gives ground slowly; kanban is the least
-     urgent panel so it compresses first (shrink factor 3). Nothing is
-     allowed to compress to unreadable — each keeps a min-height floor and
-     scrolls within it rather than shrinking further. */
-  #dueSoon { flex: 0 1 auto; min-height: 4rem; }
-  #kanban  { flex: 0 3 auto; min-height: 3rem; }
+  /* Reading priority when space is tight (a glance is for what's RUNNING):
+     ops takes the leftover space and never shrinks below a legible 6rem.
+     Nothing is allowed to compress to unreadable — each child keeps a
+     min-height floor and scrolls within it rather than shrinking further. */
   .right-rail .ops { flex: 1 1 auto; min-height: 6rem; }
   .right-rail .spawn { flex: 0 0 auto; overflow: visible; }
 
-  /* asana widgets — legible from a distance: item text well above the tiny
-     voice-select buttons, tabular numerals on the days-left, panel label
-     visually separated with a rule underneath */
-  .asana-widget .vlabel {
-    font-size: .74rem; letter-spacing: .16em; color: var(--gold-dim);
-    text-transform: uppercase; margin-bottom: .35rem; padding-bottom: .3rem;
-    border-bottom: 1px solid var(--border);
-  }
-  /* verified-vs-assumed (Pat, 08-18): shared by every "cache age" readout —
-     Asana widgets AND the visual-plans panel (.voices .vlabel .fetched) —
-     so one rule keeps them all in Nicole's DEGRADED vocabulary. Plain =
+  /* verified-vs-assumed (owner, 08-18): the "cache age" readout on the
+     visual-plans panel (.voices .vlabel .fetched), kept in the same DEGRADED
+     vocabulary as the listener's states. Plain =
      within its own TTL, i.e. as fresh as the panel ever promises. .stale =
      the cache is older than the TTL it claims, i.e. what's on screen is an
      ASSUMED fact, not a just-verified one — same amber family as the
@@ -365,46 +353,6 @@
   .vlabel .fetched.stale {
     color: var(--amber); opacity: .95;
     text-shadow: 0 0 6px rgba(255,196,107,.5);
-  }
-  .asana-widget .info-row {
-    font-size: .85rem; letter-spacing: .02em; color: var(--cyan-dim);
-    border: 1px solid var(--border); padding: .4rem .6rem;
-    display: flex; justify-content: space-between; gap: .6rem;
-  }
-  .asana-widget .info-row .days { color: var(--cyan); white-space: nowrap; font-variant-numeric: tabular-nums; }
-  /* due/overdue task rows (08-19, Pat's working filter): overdue = the
-     unified alert red + chip; due today = gold highlight; rest stay cyan */
-  .asana-widget .info-row .task-name {
-    flex: 1; min-width: 0; white-space: nowrap;
-    overflow: hidden; text-overflow: ellipsis;
-  }
-  .asana-widget .info-row .tag {
-    color: var(--gold-dim); font-size: .6rem; letter-spacing: .08em;
-    white-space: nowrap; align-self: center; text-transform: uppercase;
-  }
-  .asana-widget .info-row.overdue { border-color: rgba(255,59,48,.55); }
-  .asana-widget .info-row.overdue .days { color: var(--red); text-shadow: 0 0 6px rgba(255,59,48,.5); }
-  .asana-widget .info-row.today .days { color: var(--gold); text-shadow: 0 0 6px var(--gold-glow); }
-  .asana-widget .due-chip {
-    font-size: .5rem; letter-spacing: .1em; padding: .02rem .28rem; margin-left: .3rem;
-    border: 1px solid var(--red); border-radius: 8px; color: var(--red);
-    text-transform: uppercase; vertical-align: middle;
-  }
-  .asana-widget .more-row {
-    font-size: .64rem; color: var(--cyan-dim); opacity: .85;
-    padding: .3rem .1rem 0; letter-spacing: .08em;
-  }
-  .asana-widget .kanban-section {
-    font-size: .85rem; color: var(--cyan-dim);
-    border: 1px solid var(--border); padding: .4rem .6rem;
-  }
-  .asana-widget .kanban-section .sec-head {
-    display: flex; justify-content: space-between; color: var(--cyan);
-    text-transform: uppercase; letter-spacing: .06em; font-variant-numeric: tabular-nums;
-  }
-  .asana-widget .kanban-section .ticket {
-    font-size: .8rem; opacity: .8; padding-left: .35rem; margin-top: .15rem;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
 
   /* active ops panel */
@@ -507,7 +455,7 @@
     animation: none;
   }
   /* skip (08-19): cut the sentence in flight and move on, WITHOUT muting
-     (Pat -- "skip to the end of a sentence ... don't need the full
+     (owner -- "skip to the end of a sentence ... don't need the full
      playthrough"). AMBER while live, the working/transport family: this is
      an ADVANCE, so it must not wear slate (the off-state) or red (a fault).
      Anchored on its own below the mute toggle rather than sharing a row
@@ -602,7 +550,7 @@
      amber, same family as every other "assumed" marker on this page. */
   .line .chip.trunc { border-color: var(--amber); color: var(--amber); }
   /* 08-18: quiet-mode reply (POST /say) — an assistant line that was never
-     spoken (Pat muted, session skips the voice tool). Same cyan family as a
+     spoken (the owner muted, session skips the voice tool). Same cyan family as a
      spoken claude line, just chipped "text" so the two are distinguishable. */
   .line.say { border-color: var(--cyan); background: rgba(127, 216, 255, .07); }
   .line.say .who { color: var(--cyan); text-shadow: 0 0 6px var(--cyan-glow); }
@@ -656,7 +604,7 @@
   .mic-transcript[hidden] { display: none; }
 
   /* ---- MUTED stage badge (08-19) ----
-     Pat, verified live: while muted the heartbeat keeps a live `rms` (the
+     the owner, verified live: while muted the heartbeat keeps a live `rms` (the
      stream stays open for instant resume), so the visualiser kept bouncing
      and muted looked identical to listening — "there is listening when I go
      on mute mode, there's just no response." Colour alone was never going
@@ -712,14 +660,13 @@
   /* targeting-reticle brackets on the existing side panels — gold trim,
      two opposing corners, pure decoration (pointer-events preserved by
      being pseudo-elements with no size overlap on controls) */
-  .asana-widget { position: relative; padding: 5px 4px; }
   #plans { position: relative; padding: 5px 4px; }
-  .asana-widget::before, #plans::before, .cmd-panel::before {
+  #plans::before, .cmd-panel::before {
     content: ""; position: absolute; top: 0; left: 0; width: 12px; height: 12px;
     border-top: 1px solid var(--gold-dim); border-left: 1px solid var(--gold-dim);
     pointer-events: none;
   }
-  .asana-widget::after, #plans::after, .cmd-panel::after {
+  #plans::after, .cmd-panel::after {
     content: ""; position: absolute; bottom: 0; right: 0; width: 12px; height: 12px;
     border-bottom: 1px solid var(--gold-dim); border-right: 1px solid var(--gold-dim);
     pointer-events: none;
@@ -755,11 +702,11 @@
   .feed { animation: panelBoot .7s ease-out 1s backwards; }
 
   /* ---- comms replay control (08-24) ----
-     Pat is usually away from the screen while a line is spoken, so the feed is
-     where he finds it afterwards — but the text was all that survived, the
+     the owner is usually away from the screen while a line is spoken, so the feed is
+     where they finds it afterwards — but the text was all that survived, the
      audio was gone. Every assistant line now carries a play control that
      re-synthesises it through the SAME local kokoro voice it was spoken in
-     (POST /replay), because the personas are how he tells whose finding a
+     (POST /replay), because the personas are how they tells whose finding a
      line was. Cyan-dim at rest, arc-reactor blue while active. Nothing here
      is ever red: a replay that can't start is informational, not a failure. */
   .line .who .right { display: flex; align-items: center; gap: .55rem; flex: 0 0 auto; }
@@ -786,13 +733,13 @@
 
   /* ---- wake / directive acknowledgement (08-24) ----
      Until now NOTHING on this page changed when a wake phrase was accepted,
-     so a healthy wake word was indistinguishable from a dead one — Pat has
-     reported it down while it was working, and repeats himself because he
+     so a healthy wake word was indistinguishable from a dead one — the owner has
+     reported it down while it was working, and repeats themself because they
      cannot tell. This fires the moment a directive actually LANDS (POST
      /inbox: wake phrase, typed, or dictated alike), in the arc-reactor idiom
      already used for the boot-in — an expanding ring plus a whole-page blue
      wash, sized to be caught peripherally from across the room, which is
-     where he is. Arc-reactor BLUE, never red: this is an acknowledgement.
+     where they are. Arc-reactor BLUE, never red: this is an acknowledgement.
      VISUAL ONLY — both voicemode feedback tones are off deliberately
      (VOICEMODE_AUDIO_FEEDBACK, VOICEMODE_SOUNDFONTS_ENABLED) and this adds
      no sound of its own. */
@@ -895,8 +842,6 @@
     <div class="voices stacked" id="plans" hidden><div class="vlabel">VISUAL PLANS</div></div>
   </div>
   <div class="right-rail" id="rightRail">
-    <div class="asana-widget" id="dueSoon" hidden><div class="vlabel">DUE / OVERDUE</div></div>
-    <div class="asana-widget" id="kanban" hidden><div class="vlabel">KANBAN</div></div>
   <div class="ops" id="ops" hidden><div class="olabel">ACTIVE OPS</div></div>
   <div class="spawn">
     <select id="spawnModel"><option value="">model · default</option><option value="sonnet">sonnet</option><option value="opus">opus</option><option value="fable">fable</option></select>
@@ -1029,7 +974,7 @@ const t0 = performance.now();
 const REDUCED_MOTION = !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
 let animT = 0, lastFrameTs = null, vizTier = 'active';
 const GOLD_RGB = '227,192,122';  // matches --gold; theme-independent trim
-/* MUTED (08-19): hudMuted is Pat's INTENT (the /mute flag — what he clicked);
+/* MUTED (08-19): hudMuted is the owner's INTENT (the /mute flag — what they clicked);
    hudCapturePaused is the DAEMON'S REALITY (heartbeat mode === 'paused', via
    state.json listening.mode). They are kept apart on purpose, the same
    verified-vs-assumed discipline as ORPHANED/DEGRADED elsewhere on this page:
@@ -1088,7 +1033,7 @@ window.addEventListener('pointermove', () => {   // debounced — fires in burst
    route through here so dictation reuses the SAME getUserMedia grant/stream
    instead of prompting twice.
 
-   Self-healing (Pat, 08-17): a device disappearing out from under an open
+   Self-healing (owner, 08-17): a device disappearing out from under an open
    getUserMedia stream — Bluetooth earbuds dropping, same as the Python
    daemon's failure mode — kills the MediaStreamTrack. Left alone, analyser
    and the last captured frame just sit there: the reticle looks alive, the
@@ -1248,7 +1193,7 @@ function drawReticle(ctx, t, avg) {
   ticks(400, 60, 6, 1, .25, -t * .1, theme.accent);
   ring(330, 1, theme.accent, .3);
 
-  /* ---- arc-reactor core (08-19 round 2, Pat: "make it cooler") ----
+  /* ---- arc-reactor core (08-19 round 2, owner: "make it cooler") ----
      Layered instrument center, all inside the 120-bar ring (base r=250):
        - depth glow: one wide faint radial behind everything central
        - fine tick ring (r=232) whose highlighted bearing TRACKS the radar
@@ -1841,7 +1786,7 @@ inboxMic.addEventListener('click', async () => {
   setMicStatus('listening…');
 });
 
-/* ---- quiet toggle (Pat, 08-18: relabeled from "mute") ----
+/* ---- quiet toggle (owner, 08-18: relabeled from "mute") ----
    The underlying endpoint/state are untouched on purpose — POST/GET /mute
    and the {"muted": bool} shape stay exactly as-is, because the live
    session's pre-converse polling and background waiters depend on that
@@ -1849,7 +1794,7 @@ inboxMic.addEventListener('click', async () => {
    standby simplification (UI changed, endpoint didn't).
    Why: "mute" reads as mic-only (Zoom/Meet convention) but this control is
    two-way — it silences the assistant's speech AND stops listening, replies go
-   text-only. Pat: "the mute button should also mute the agent's responses
+   text-only. owner: "the mute button should also mute the agent's responses
    ... perhaps it should be called quiet mode." The label now says QUIET —
    TEXT ONLY so the two-way scope is legible from the button alone, not
    just the tooltip; the active/red pulse styling (.mute-btn.muted, CSS
@@ -1937,13 +1882,13 @@ function tickOps() {
 setInterval(tickOps, 1000);
 
 /* ---- verified-vs-assumed cache-age readout (08-18) ----
-   Shared by the visual-plans panel and both Asana widgets: each carries a
+   Used by the visual-plans panel: it carries a
    server epoch of when it was actually last checked/fetched plus that
    panel's own TTL, and this renders "checked Xm ago" ticking live, going
    .stale (amber, see CSS) once the age exceeds the TTL — i.e. once what's
    on screen is older than the panel's own promise, so it's an ASSUMED
-   fact rather than one just verified. epoch==0 (never yet checked, e.g.
-   Asana key missing) reads as "never checked", stale by definition. */
+   fact rather than one just verified. epoch==0 (never yet checked)
+   reads as "never checked", stale by definition. */
 function fetchedSpan(epoch, ttlSeconds) {
   return `<span class="fetched" data-epoch="${epoch || ''}" data-ttl="${ttlSeconds || ''}">--</span>`;
 }
@@ -1961,9 +1906,9 @@ function tickCacheAges() {
 setInterval(tickCacheAges, 1000);
 
 /* ---- comms replay (08-24) ----
-   Pat, today: "if we could put a replay button on comms so that I can press
+   the owner, today: "if we could put a replay button on comms so that I can press
    play and let's do it again, maybe even at two times speed ... I'm missing
-   things and I want to go back into stuff." He is usually walking around the
+   things and I want to go back into stuff." They is usually walking around the
    room while a line is spoken, and the HUD keeps no audio — only text derived
    from voicemode's event log — so the line survived and the voice did not.
 
@@ -1973,7 +1918,7 @@ setInterval(tickCacheAges, 1000);
    /say line carries its persona name, which the server resolves back to a
    voice). Browser SpeechSynthesis was the cheaper option and is not used: one
    generic voice for every line erases the personas, and the personas are how
-   Pat tells whose finding a line was — that is most of the value here.
+   the owner tells whose finding a line was — that is most of the value here.
 
    Two hard rules, both enforced below AND on the server side:
      · QUIET MODE WINS. Muted means silent, replay included. Nothing starts
@@ -2123,10 +2068,10 @@ function guardReplay() {
 }
 
 /* ---- wake / directive acknowledgement (08-24) ----
-   Pat, today: "I'm not getting any feedback from 'Hey Jarvis' at all." The
-   wake word works — his message arrived that way — but nothing on this page
+   the owner, today: "I'm not getting any feedback from 'Hey Jarvis' at all." The
+   wake word works — their message arrived that way — but nothing on this page
    ever changed when one was accepted, so a healthy wake word and a dead one
-   looked identical and he has reported it down while it was fine.
+   looked identical and they have reported it down while it was fine.
 
    The signal already existed: always_on_listener.py posts the stripped
    directive to POST /inbox, which lands in the comms feed as a `typed` entry
@@ -2159,48 +2104,7 @@ function flashWakeAck(text) {
 /* ---- state polling ---- */
 let lastFeedKey = '', lastStatus = '', lastOpsKey = '', lastPlansKey = '', view = 'comms', lastState = null;
 let lastFeedActivityEp = null;  // newest comms-entry epoch seen — drives wake-on-activity in poll()
-let lastDueSoonKey = '', lastKanbanKey = '';
 
-/* ---- asana widgets: server pre-fetches + caches, this just renders the
-   already-cached state.json fields; hidden whenever unavailable or empty ---- */
-function renderDueSoon(d, ttl) {
-  // 08-19: Pat's working filter — tasks due this week + past due (server
-  // fetch_due_soon), replacing the old due-soon epics outright. Rows:
-  // name (ellipsized) · source tag · due date; overdue rows in the unified
-  // alert red with an OVERDUE chip, due-today gold, "+N more" instead of
-  // silent truncation.
-  const key = JSON.stringify(d);
-  if (key === lastDueSoonKey) return;
-  lastDueSoonKey = key;
-  const el = document.getElementById('dueSoon');
-  const items = d.items || [];
-  el.hidden = d.unavailable || items.length === 0;
-  el.innerHTML = `<div class="vlabel">DUE / OVERDUE ${fetchedSpan(d.fetched_epoch, ttl)}</div>` +
-    items.map(i => {
-      const cls = i.overdue ? ' overdue' : i.days_left === 0 ? ' today' : '';
-      const due = i.overdue
-        ? `${escT((i.due_on || '').slice(5))}<span class="due-chip">overdue</span>`
-        : `${escT((i.due_on || '').slice(5))} · ${i.days_left}d`;
-      return `<div class="info-row${cls}"><span class="task-name" title="${escT(i.name)}">${escT(i.name)}</span><span class="tag">${escT(i.tag || '')}</span><span class="days">${due}</span></div>`;
-    }).join('') +
-    (d.more ? `<div class="more-row">+ ${d.more} more past due / this week</div>` : '');
-  tickCacheAges();
-}
-function renderKanban(k, ttl) {
-  const key = JSON.stringify(k);
-  if (key === lastKanbanKey) return;
-  lastKanbanKey = key;
-  const el = document.getElementById('kanban');
-  const sections = k.sections || [];
-  el.hidden = k.unavailable || sections.length === 0;
-  el.innerHTML = `<div class="vlabel">KANBAN ${fetchedSpan(k.fetched_epoch, ttl)}</div>` +
-    sections.map(s =>
-      `<div class="kanban-section"><div class="sec-head"><span>${escT(s.name)}</span><span>${s.count}</span></div>` +
-      (s.tickets || []).map(t => `<div class="ticket">· ${escT(t)}</div>`).join('') +
-      `</div>`
-    ).join('');
-  tickCacheAges();
-}
 const tabComms = document.getElementById('tabComms');
 const tabWork = document.getElementById('tabWork');
 function setView(v) {
@@ -2222,16 +2126,16 @@ function renderFeed(s) {
   // Replay state lives in JS keyed by each line's epoch, never in the DOM,
   // so it survives this wholesale rebuild — same discipline as expandedOps.
   feedByKey = new Map(entries.filter(isAssistantLine).map(l => [String(l.ep), l]));
-  // Only follow the tail if he is already AT the tail. Yanking the feed to
-  // the bottom while he is scrolled up re-reading an old line is precisely
-  // the thing replay exists to let him do.
+  // Only follow the tail if they are already AT the tail. Yanking the feed to
+  // the bottom while they are scrolled up re-reading an old line is precisely
+  // the thing replay exists to let them do.
   const atBottom = linesEl.scrollHeight - linesEl.scrollTop - linesEl.clientHeight < 80;
   linesEl.innerHTML = view === 'comms'
     ? entries.map(l =>
         `<div class="line ${l.who === 'you' ? 'you' : l.who === 'typed' ? 'typed' : l.who === 'say' ? 'say' : 'claude'}"${isAssistantLine(l) ? ` data-rk="${l.ep}"` : ''}>
            <span class="who"><span>${
-             l.who === 'you' ? '▸ Pat'
-             : l.who === 'typed' ? '▸ Pat · ⌨<span class="chip ' + (l.status === 'seen' ? 'seen' : '') + '">' + esc(l.status === 'seen' ? 'received' : 'queued') + '</span>'
+             l.who === 'you' ? '▸ you'
+             : l.who === 'typed' ? '▸ you · ⌨<span class="chip ' + (l.status === 'seen' ? 'seen' : '') + '">' + esc(l.status === 'seen' ? 'received' : 'queued') + '</span>'
              // say (08-18): quiet-mode reply via POST /say — assistant line
              // that was deliberately never spoken; chip it text-only.
              : l.who === 'say' ? '◂ ' + esc((l.persona || 'Jarvis').toLowerCase()) + '<span class="chip textonly" title="quiet mode — delivered as text only, never spoken">text</span>'
@@ -2291,7 +2195,7 @@ async function poll() {
       : hudCapturePaused ? 'sensors paused · confirmed by the wake daemon'
       : 'sensors winding down…';
 
-    // Two user-facing states (Pat, 08-17): LISTENING (the default resting
+    // Two user-facing states (owner, 08-17): LISTENING (the default resting
     // state — the wake listener is armed, "hey jarvis" works any time,
     // including while the assistant is working) and MUTED (hard off,
     // nothing is heard). Everything else here is activity indication
@@ -2455,8 +2359,6 @@ async function poll() {
       ).join('');
       tickCacheAges();
     }
-    renderDueSoon(s.due_soon || { items: [], unavailable: true, fetched_at: '', fetched_epoch: 0 }, s.asana_cache_seconds);
-    renderKanban(s.kanban || { sections: [], unavailable: true, fetched_at: '', fetched_epoch: 0 }, s.asana_cache_seconds);
     tintEl.className =
       s.muted ? 'muted'
       : s.status === 'speaking' ? 'speaking'

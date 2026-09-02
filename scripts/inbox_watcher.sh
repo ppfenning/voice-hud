@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# inbox_watcher.sh -- wait for Pat to say something, then get out of the way.
+# inbox_watcher.sh -- wait for the user to say something, then get out of the way.
 #
-# The HUD inbox is a PULL queue with no push. A directive Pat types or dictates
+# The HUD inbox is a PULL queue with no push. A directive the user types or dictates
 # into the page only gets read when a converse call polls GET /inbox before its
 # turn, or when a standby waiter is sitting on /standby. So during a long stretch
-# of work -- agents dispatched, tools running, nobody polling -- his message just
+# of work -- agents dispatched, tools running, nobody polling -- their message just
 # sits there. On 2026-08-26 a directive posted at 08:08:53 and was found by
 # accident, long after it mattered.
 #
@@ -17,7 +17,7 @@
 #
 # Usage (from the assistant, as a backgrounded Bash call):
 #
-#     ~/repos/voice-hud/inbox_watcher.sh [max-seconds]     # default 600
+#     scripts/inbox_watcher.sh [max-seconds]     # default 600
 #
 # Exit codes:
 #   0  a directive is waiting -- its text is on stdout
@@ -41,8 +41,9 @@ case "$MAX_SECONDS" in
   ''|*[!0-9]*) echo "inbox_watcher: max-seconds must be a whole number" >&2; exit 2 ;;
 esac
 
-HUD_DIR="$(cd "$(dirname "$0")" && pwd)"
-PID_FILE="$HUD_DIR/inbox_watcher.pid"
+STATE_DIR="${VOICE_HUD_STATE_DIR:-$HOME/.local/state/voice-hud}"
+mkdir -p "$STATE_DIR"
+PID_FILE="$STATE_DIR/inbox_watcher.pid"
 
 # Singleton lock, same shape as always_on_listener.py's: the file holds
 # {"pid": N}, a lock held by a live process means exit quietly rather than

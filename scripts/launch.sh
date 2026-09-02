@@ -24,7 +24,7 @@ if ! curl -sf -m 1 "$URL/health" >/dev/null 2>&1; then
      && systemctl --user list-unit-files voice-hud-server.service >/dev/null 2>&1; then
     systemctl --user start voice-hud-server.service 2>/dev/null
   else
-    nohup python3 "$HOME/repos/voice-hud/server.py" > "${TMPDIR:-/tmp}/voice-hud.log" 2>&1 &
+    (cd "$(dirname "$0")/.." && nohup python3 -m voice_hud.server > "${TMPDIR:-/tmp}/voice-hud.log" 2>&1 &)
   fi
   sleep 0.6
 fi

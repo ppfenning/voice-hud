@@ -5,7 +5,7 @@ session happens to be in standby.
 
 THE GAP THIS CLOSES: wake_listener.py only owns the mic while standby is
 true. The moment Claude is busy — running tools, waiting on agents, mid-
-reply — nothing is listening, so Pat physically cannot start a conversation
+reply — nothing is listening, so the owner physically cannot start a conversation
 by voice and has to type into the HUD inbox instead ("listening mode isn't
 something that I can always go into... we should have the context window
 open for us to be able to talk"). This daemon is meant to run continuously
@@ -90,14 +90,14 @@ on any inbox activity — see its docstring).
 AUDIO QUALITY (fixed 2026-08-17): the ORIGINAL implementation called
 sd.rec() per chunk — which opens AND closes a CoreAudio input stream every
 single call, roughly every 0.3-2s. That constant device churn was found to
-disrupt concurrent TTS playback (static/crackle) on Pat's DisplayLink dock,
+disrupt concurrent TTS playback (static/crackle) on the owner's DisplayLink dock,
 a device already known to be picky about buffering (see
 sitecustomize-portaudio-latency.py). Fixed by opening ONE long-lived
 sd.InputStream (open_stream()) and reading from it continuously
 (read_chunk()) instead — the device is opened once and stays open for the
 life of the process, reopened only on an actual device/stream error, never
 on a mute/speaking/cooldown gate. See the 2026-08-17 verification note in
-the repo (or ask Pat) for the actual before/after listening comparison —
+the repo (or ask the owner) for the actual before/after listening comparison —
 don't take the mechanism as proof; PortAudio/CoreAudio buffering issues are
 notoriously hardware- and driver-specific.
 
@@ -123,7 +123,7 @@ Run with the voice-mode venv python (has sounddevice + numpy):
 
 Normally supervised by launchd (com.voicemode.always-on-listener.plist,
 KeepAlive) so a crash the code itself can't prevent still self-heals within
-seconds instead of needing Pat to notice and restart it by hand.
+seconds instead of needing the owner to notice and restart it by hand.
 """
 import ctypes
 import io
@@ -143,11 +143,12 @@ from pathlib import Path
 import numpy as np
 import sounddevice as sd
 
-from wake_guard import RMS_GATE, decoder_signals, describe, safe_judge_directive, transcript_text
+from voice_hud.paths import STATE_DIR
+from voice_hud.wake_guard import RMS_GATE, decoder_signals, describe, safe_judge_directive, transcript_text
 
 HUD = "http://127.0.0.1:8123"
 WHISPER = os.environ.get("VOICE_HUD_WHISPER_URL", "http://127.0.0.1:2022/v1/audio/transcriptions")
-HUD_DIR = Path(__file__).resolve().parent
+HUD_DIR = STATE_DIR  # runtime state lives outside the package; see voice_hud.paths
 HEARTBEAT_FILE = HUD_DIR / "listening_heartbeat.json"
 DEBOUNCE_FILE = HUD_DIR / "wake_debounce.json"
 PID_FILE = HUD_DIR / "always_on_listener.pid"
@@ -171,7 +172,7 @@ SIGNAL_FLOOR = 1e-6             # below this a chunk is DIGITAL silence (a
                                  # stream bound to a device that isn't
                                  # actually routed returns literal zeros),
                                  # NOT a quiet room. Measured 2026-08-18 on
-                                 # Pat's machine, both 2s captures, same
+                                 # the owner's machine, both 2s captures, same
                                  # silent room: the live default input
                                  # (Pixel Buds) gave rms=8.8e-5 with
                                  # 12194/32000 nonzero frames, while the
@@ -189,7 +190,7 @@ SELF_AUDIO_TAIL_SECONDS = 0.5   # margin added after our own TTS playback ends
                                  # before a wake window is trusted again. Kept
                                  # SMALL on purpose: measured 2026-08-18 the
                                  # closest legitimate capture after a playback
-                                 # end was 4s (Pat's real "Hey, Bella, what's
+                                 # end was 4s (the owner's real "Hey, Bella, what's
                                  # the status?" at +4s), so a large margin
                                  # would start eating real wakes to defend
                                  # against a leak that does not occur.
@@ -221,7 +222,7 @@ STALL_GRACE_SECONDS = 2.0       # after a stuck read times out, how long to
 # daemons agree on what counts as a wake. A lone "Jarvis" (or "Bella") in
 # overheard audio (meetings, TV, normal conversation) must never trigger.
 # 2026-08-19 JARVIS rebrand: jarvis phrases ADDED alongside the bella ones —
-# bella stays as a transition alias until Pat says to drop it. "jervis" is
+# bella stays as a transition alias until the owner says to drop it. "jervis" is
 # whisper's common mis-transcription of the name, same role "bela" plays
 # for bella.
 WAKE_WORDS = (
@@ -424,7 +425,7 @@ def default_input_index() -> int:
     Pixel Buds mid-run:
         [fresh process]        PA default idx=6 'MacBook Pro Microphone'
         [after switch, no reinit] PA default idx=6 'MacBook Pro Microphone'  <- STALE
-        [after switch, w/ reinit]  PA default idx=0 "Patrick's Pixel Buds Pro 2"
+        [after switch, w/ reinit]  PA default idx=0 "<the earbuds>"
 
     That is the whole bug: ensure_stream() used to treat this value as
     live, so a default-input change that raised no error was invisible and
@@ -462,7 +463,7 @@ def open_stream(device: int) -> sd.InputStream:
     never per chunk. The old code called sd.rec() (which opens AND closes a
     CoreAudio stream every single call) roughly every 0.3-2s; that churn
     was found (2026-08-17) to be disrupting concurrent TTS playback on
-    Pat's fragile DisplayLink dock (static/crackle). A single persistent
+    the owner's fragile DisplayLink dock (static/crackle). A single persistent
     stream removes the churn entirely. No explicit `latency=` — inherits
     the venv's sitecustomize.py `sd.default.latency = ("high", "high")`,
     the same fix already applied to TTS output."""
@@ -553,7 +554,7 @@ _stream_failures = {"count": 0}
 # loop and from the FAILURE path alike, so a daemon stuck recovering forever,
 # or one bound to a device returning pure silence, both read as a healthy
 # green ARMED on the page. A frozen indicator that still looks alive is worse
-# than one that admits it is dead (Pat, 08-18).
+# than one that admits it is dead (owner, 08-18).
 _capture_state = {
     "started_ts": time.time(),
     "last_read_ts": 0.0,    # last read that RETURNED, silence or not
@@ -574,9 +575,9 @@ _capture_state = {
     # everything BETWEEN those two numbers is a listener that is alive,
     # capturing, reporting itself perfectly healthy, and structurally
     # incapable of ever hearing a wake word — because listen_forever()
-    # discards every sub-gate chunk before whisper ever sees it. Pat sat in
+    # discards every sub-gate chunk before whisper ever sees it. The owner sat in
     # that band (measured 1.6e-5, i.e. 0.003x the gate) and found out by
-    # talking to a machine that could not hear him while the HUD showed
+    # talking to a machine that could not hear them while the HUD showed
     # green. These fields exist so that band has a name and a number.
     "levels": (),           # rolling ((ts, rms), ...) over LEVEL_WINDOW_SECONDS
     "above_gate_ts": 0.0,   # last chunk that actually reached RMS_GATE
@@ -620,7 +621,7 @@ def _blocking_read(stream, frames: int, out_q: "queue.Queue") -> None:
 def recover_stream(reason: str) -> None:
     """The one recovery path for both a RAISED device/stream error and a
     SILENTLY stuck read (2026-08-17, root-caused from a live failure after
-    Pat swapped audio dongles): PortAudio enumerates devices once and
+    the owner swapped audio dongles): PortAudio enumerates devices once and
     caches that table. Once the device set changes underneath a running
     process, the cached table goes stale and every subsequent InputStream
     open can fail — or, worse, appear to open fine and then never deliver
@@ -694,7 +695,7 @@ def read_chunk(seconds: float) -> np.ndarray:
     """Read one chunk from the single long-lived input stream (never a
     fresh sd.rec() — see open_stream()). A vanished input mid-session is
     routine (Bluetooth earbuds die, get put away, wander out of range;
-    Pat swapping dongles hit the same path 2026-08-17), not exceptional:
+    the owner swapping dongles hit the same path 2026-08-17), not exceptional:
     on a device/stream error, or a read that never returns at all (see
     recover_stream()), this recovers and retries rather than raising or
     hanging — the caller never sees a device-change interruption, only a
@@ -744,7 +745,7 @@ def note_successful_read(pcm: np.ndarray) -> np.ndarray:
                       whisper instead of discarding it
     Only the third one means a wake word could ever have been heard. A
     daemon can satisfy the first two indefinitely and still be completely
-    deaf in the only sense Pat cares about.
+    deaf in the only sense the owner cares about.
 
     above_gate_ts is updated only while actually listening, never while
     paused for TTS: on in-ear buds the daemon's own speech leaks into the
@@ -789,12 +790,12 @@ def silent_seconds(now: float) -> float:
 def maybe_rebind_if_device_moved() -> None:
     """PRIMARY watchdog: the OS moved the mic, so move with it.
 
-    This is the one that actually fixes Pat's symptom, and it is separate
+    This is the one that actually fixes the owner's symptom, and it is separate
     from the silence check below because the two failures look nothing
     alike. Measured 2026-08-18 on this machine: with the listener bound to
     the Pixel Buds, switching the system default input to the built-in mic
     produced NO error, NO stall, and NO drop in level — the buds kept
-    handing over perfectly good audio (rms 1.3e-05, unchanged) while Pat's
+    handing over perfectly good audio (rms 1.3e-05, unchanged) while the owner's
     voice was going somewhere else entirely. Nothing in an error-driven or
     silence-driven design can see that; the listener just quietly listens
     to the wrong microphone forever, which is precisely how "hey Bella"
@@ -827,7 +828,7 @@ def maybe_rebind_if_deaf() -> None:
     so this catches what maybe_rebind_if_device_moved() cannot.
 
     Rebinding costs ~200ms and is a no-op if it lands on the same device,
-    so acting on suspicion is cheap and refusing to act is what left Pat
+    so acting on suspicion is cheap and refusing to act is what left the owner
     unable to say "hey Bella" for a whole working session.
 
     Rate-limited to one attempt per DEAF_REBIND_SECONDS, and deliberately
@@ -860,7 +861,7 @@ def touch_heartbeat(mode: str = None) -> None:
     HUD's alive/OFFLINE call. `capture_ts` is new and is the honest one:
     the last moment a chunk carried real audio. server.py's read_listening()
     reports alive-but-not-capturing as DEGRADED rather than ARMED — the
-    state this daemon was silently sitting in while Pat couldn't wake it.
+    state this daemon was silently sitting in while the owner couldn't wake it.
 
     Written via a temp file + os.replace so a poll that lands mid-write
     reads the previous whole document instead of a truncated one and
@@ -1035,7 +1036,7 @@ def post_directive(text: str) -> bool:
         return True
 
 
-# The payload for a wake with NOTHING after it (2026-08-19, Pat: "the Jarvis
+# The payload for a wake with NOTHING after it (2026-08-19, owner: "the Jarvis
 # functionality works if it's more conversational — 'Hey Jarvis' wakes you up
 # and then puts you in a hearing-you mode"). Deliberately a normal
 # {"text": ...} POST /inbox directive, NOT a new field: /inbox's schema is
@@ -1048,14 +1049,14 @@ WAKE_ONLY_TEXT = "wake: hearing you"
 
 
 def handle_wake(wake_pcm: np.ndarray) -> None:
-    """A matched wake phrase always reaches Pat's session now — either as
-    the directive he spoke in the same breath, or (new) as the WAKE_ONLY
-    sentinel when he just said the name and stopped.
+    """A matched wake phrase always reaches the owner's session now — either as
+    the directive they spoke in the same breath, or (new) as the WAKE_ONLY
+    sentinel when they just said the name and stopped.
 
     THE BUG THIS FIXES (diagnosed from the live log, 08-19): the daemon
     posted only the REMAINDER after the wake phrase, so a bare "Hey Jarvis."
     stripped to an empty string and nothing was posted at all —
-    indistinguishable, from Pat's side, from a dead wake word. The log
+    indistinguishable, from the owner's side, from a dead wake word. The log
     proves the daemon was working perfectly the whole time:
         WAKE matched (rms=0.03038, 3.0s window 17:32:50-17:32:53): 'Hey Jarvis.'
     ...followed by silence, because "" is falsy.
@@ -1073,8 +1074,8 @@ def handle_wake(wake_pcm: np.ndarray) -> None:
     for substantive text, and an LLM tier for the ambiguous residue. Note
     what a rejection costs here: NOT silence. A rejected directive still
     falls through to the WAKE_ONLY branch below and posts hearing-you, so
-    the expensive failure (Pat gets no response at all) is not reachable
-    from this gate — it costs him a repeat at worst.
+    the expensive failure (the owner gets no response at all) is not reachable
+    from this gate — it costs them a repeat at worst.
 
     The `heard_wake_word(transcript)` re-check on the SECOND transcription
     is what keeps this honest. Reaching this function means the wake phrase
@@ -1088,7 +1089,7 @@ def handle_wake(wake_pcm: np.ndarray) -> None:
         # Heartbeat around the whisper call as well as through the gate:
         # server.py calls this listener dead after LISTENING_ALIVE_SECONDS
         # (15) without one, and transcription alone can block for up to 20.
-        # A healthy daemon showing OFFLINE degrades the exact indicator Pat
+        # A healthy daemon showing OFFLINE degrades the exact indicator the owner
         # uses to notice real deafness.
         touch_heartbeat()
         transcript, signals = transcribe_detailed(utterance_pcm)
@@ -1100,7 +1101,7 @@ def handle_wake(wake_pcm: np.ndarray) -> None:
                                       # it, so a future false positive is
                                       # diagnosable from the log alone
         if verdict.accept:
-            posted = post_directive(directive)   # unchanged path — Pat relies on it
+            posted = post_directive(directive)   # unchanged path — the owner relies on it
             log_line(f"WAKE directive {'posted' if posted else 'SUPPRESSED (mute/debounce)'}: {directive!r}")
             return None
         elif heard_wake_word(transcript):
@@ -1164,16 +1165,16 @@ def window_is_our_own_audio(window_start: float, window_end: float) -> bool:
     through the microphone.
 
     The MIDPOINT of the window is tested, not its edges. A window that
-    merely straddles the end of playback is overwhelmingly Pat answering the
-    instant we stopped talking — measured at +4s, and his real wake word
+    merely straddles the end of playback is overwhelmingly the owner answering the
+    instant we stopped talking — measured at +4s, and their real wake word
     landed in exactly such a window — so testing overlap at the edges would
-    reject the most natural thing he does. A window whose middle is inside
+    reject the most natural thing they do. A window whose middle is inside
     our playback is ours.
 
     This is deliberately independent of the status-based pause: it is
     checked at the moment of ACCEPTING a wake, so even if the pause gate is
     entirely absent (HUD unreachable, status wrong, cooldown too short) our
-    own voice still cannot put a directive into Pat's inbox."""
+    own voice still cannot put a directive into the owner's inbox."""
     playback = own_playback()
     if not playback["start"]:
         return False

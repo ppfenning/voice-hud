@@ -34,7 +34,7 @@ CHUNK_SECONDS = 1.6  # short chunks = fast wake; "bella" alone matches, so a
 RMS_GATE = 0.006  # normalized RMS below this = ambient noise, skip whisper
 # Phrases, not the bare name: a lone name in overheard audio (meetings, TV)
 # must not wake the session. 2026-08-19 JARVIS rebrand: jarvis phrases ADDED
-# alongside bella (transition alias, removal is Pat's later call); "jervis"
+# alongside bella (transition alias, removal is the owner's later call); "jervis"
 # covers whisper's common mis-transcription, same role as "bela".
 WAKE_WORDS = (
     "hey jarvis", "hey, jarvis", "wake up jarvis", "wake up, jarvis",
