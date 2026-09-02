@@ -252,7 +252,7 @@ STATUS_BY_EVENT = {
     "SESSION_END": "standby",
 }
 
-VOICE_ROSTER = (
+DEFAULT_VOICE_ROSTER = (
     "af_bella", "af_heart", "af_nicole", "af_sky", "af_nova", "af_sarah",
     "af_aoede", "af_river", "bf_emma", "am_michael", "bm_fable", "bm_george",
 )
@@ -327,6 +327,37 @@ def read_cast() -> dict:
         return _cast_cache["value"]
     _cast_cache.update(at=now, value=fetch_cast())
     return _cast_cache["value"]
+def _is_kokoro_shaped(entry: str) -> bool:
+    """Pure: kokoro's own "xx_name" shape, e.g. "af_bella" — a NON-EMPTY
+    prefix and a NON-EMPTY suffix either side of the first underscore.
+    "_" in entry is not enough: "af_" and "_bella" both contain an
+    underscore but split to an empty half. persona_voice() reads
+    v.split("_", 1)[1] as the persona name, so an empty suffix does not
+    fail loudly — it becomes the match for a persona-less /replay (server
+    coerces a missing persona to ""), returns the junk id instead of
+    falling through to DEFAULT_REPLAY_VOICE, and the synthesis 503s. An
+    empty prefix is equally not a real kokoro id, so it is rejected too."""
+    prefix, sep, suffix = entry.partition("_")
+    return bool(sep) and bool(prefix) and bool(suffix)
+
+
+def parse_voice_roster(raw: str) -> tuple:
+    """Pure: a comma-separated VOICE_HUD_VOICE_ROSTER value into a tuple of
+    kokoro voice ids. Entries must be kokoro's own "xx_name" shape (e.g.
+    "af_bella"), NOT a bare display name ("bella") — persona_voice() below
+    reads the persona as the suffix after the FIRST underscore
+    (v.split("_", 1)[1]) for every entry in this roster, and it is called
+    from resolve_replay_voice()'s kokoro-unreachable fallback path, so a
+    malformed entry here is not a smaller roster, it silently breaks a
+    replay the next time one falls back to it (see _is_kokoro_shaped()).
+    Entries with no underscore, an empty prefix or suffix, and
+    blank/whitespace-only entries, are all dropped rather than propagated;
+    empty input yields an empty tuple, and the caller decides the
+    fallback, same shape as parse_speed()'s ValueError->default split."""
+    return tuple(v.strip() for v in raw.split(",") if _is_kokoro_shaped(v.strip()))
+
+
+VOICE_ROSTER = parse_voice_roster(os.environ.get("VOICE_HUD_VOICE_ROSTER", "")) or DEFAULT_VOICE_ROSTER
 
 
 def read_events() -> tuple:
