@@ -19,7 +19,7 @@ listener = ["sounddevice", "numpy"]
 dev = ["pytest"]
 
 [project.urls]
-Repository = "https://github.com/ppfenning/voice-hud"
+Repository = "https://github.com/ppfenning/agent-voice-hud"
 
 [tool.setuptools.packages.find]
 include = ["voice_hud*"]

@@ -55,7 +55,7 @@ TTS), which default to localhost too.
 
 ```bash
 sudo apt install libportaudio2 ffmpeg
-git clone https://github.com/ppfenning/voice-hud ~/repos/voice-hud
+git clone https://github.com/ppfenning/agent-voice-hud ~/repos/voice-hud
 cd ~/repos/voice-hud
 uv venv && uv pip install -e ".[listener]"
 mkdir -p ~/.config/systemd/user
