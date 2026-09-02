@@ -129,6 +129,7 @@ the top of `voice_hud/server.py`. In short:
 | `GET/POST /mute` | Quiet mode. Muted means no TTS **and** no listening; the server enforces it, not just the page. |
 | `GET/POST /standby` | Idle flag for background waiters. |
 | `GET/POST /tasks` | The "active ops" list a session publishes about its agents, with server-side liveness probing via each item's `heartbeat_file`. |
+| `GET/POST /work` | An external tracker's view of what's due and what its boards look like: a plain replace-list, with none of `/tasks`' aging or liveness machinery. `posted` answers "has a poster ever spoken", not "is there anything to show" — an intentionally empty post still reads as posted. |
 | `GET/POST /inbox`, `POST /inbox/clear` | Directives from the page or the wake listener; the session polls before each turn. |
 | `POST /inbox/audio` | A WAV body: rejected as silence or filler by the same gate as the ambient wake, otherwise transcribed and queued. |
 | `POST /say` | Append a text-only assistant line while muted. |
