@@ -906,7 +906,7 @@ const opsEl = document.getElementById('ops');
 const tintEl = document.getElementById('tint');
 const bootEl = document.getElementById('boot');
 const muteBadgeSub = document.getElementById('muteBadgeSub');
-let prevStandby = null, currentTasks = [];
+let prevStandby = null, currentTasks = [], currentCast = [];
 let opFlash = {}, prevOpStatuses = {}, lastBusyAt = performance.now();
 const escT = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 bootEl.addEventListener('animationend', e => { if (e.target === bootEl) bootEl.classList.remove('run'); });
@@ -1413,6 +1413,53 @@ function draw(now) {
     ctx.fillStyle = beam;
     ctx.beginPath(); ctx.arc(0, 0, 560, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
+  }
+
+  /* the org ring — the standing cast, one seat per definition file the
+     server found, on a fixed inner orbit that drifts a few degrees a minute.
+     A seat sits dim until an op carries its persona, then it lights, pulses,
+     and throws a thread to the core. Lane by write authority: seats that may
+     write are gold, seats that only read are the theme accent. Just for the
+     look of it — and because it shows, at a glance, who is on the floor. */
+  if (currentCast.length) {
+    const R = 236;
+    ring(R, 1, theme.accent, .08, [1, 11], -t * .01);
+    const active = new Set(currentTasks
+      .filter(k => k.status === 'running' && k.persona)
+      .map(k => String(k.persona).toLowerCase()));
+    currentCast.forEach((seat, i) => {
+      const a = -Math.PI / 2 + t * .012 + (i / currentCast.length) * Math.PI * 2;
+      const x = C + Math.cos(a) * R, y = C + Math.sin(a) * R;
+      const on = active.has(String(seat.name).toLowerCase());
+      const rgb = seat.lane === 'writes' ? '227,192,122' : themeRGB.accent;
+      const pulse = on ? .6 + .4 * Math.sin(t * 3 + i) : 1;
+      if (on) {
+        ctx.strokeStyle = `rgba(${rgb},${.18 * pulse})`; ctx.lineWidth = 1;
+        ctx.setLineDash([2, 6]);
+        ctx.beginPath(); ctx.moveTo(C, C); ctx.lineTo(x, y); ctx.stroke();
+        ctx.setLineDash([]);
+        const g = ctx.createRadialGradient(x, y, 0, x, y, 30);
+        g.addColorStop(0, `rgba(${rgb},${.7 * pulse})`);
+        g.addColorStop(1, `rgba(${rgb},0)`);
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(x, y, 30, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.fillStyle = `rgba(${rgb},${on ? 1 : .35})`;
+      ctx.beginPath(); ctx.arc(x, y, on ? 6 : 4, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = `rgba(${rgb},${on ? .9 : .3})`; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(x, y, on ? 11 : 8, 0, Math.PI * 2); ctx.stroke();
+      const right = x > C + 2, above = y < C;
+      ctx.textAlign = Math.abs(x - C) < 3 ? 'center' : right ? 'left' : 'right';
+      const dx = Math.abs(x - C) < 3 ? 0 : right ? 15 : -15;
+      ctx.font = `${on ? 'bold ' : ''}17px monospace`;
+      ctx.fillStyle = `rgba(${rgb},${on ? .95 : .5})`;
+      ctx.fillText(String(seat.name).toUpperCase(), x + dx, y + (above ? -4 : 8));
+      if (seat.voice) {
+        ctx.font = '12px monospace';
+        ctx.fillStyle = `rgba(${rgb},${on ? .7 : .3})`;
+        ctx.fillText(seat.voice, x + dx, y + (above ? 12 : 24));
+      }
+    });
   }
 
   /* agent constellation — one satellite per op, orbiting the reticle */
@@ -2343,6 +2390,7 @@ async function poll() {
       prevOpStatuses[k.id] = k.status;
     });
     currentTasks = tasks;
+    if (Array.isArray(s.cast)) currentCast = s.cast;
     // Key includes plans_checked_epoch (not just the plans array) so the
     // panel actually re-renders every ~30s cache cycle even when nothing's
     // live/dead status flipped — otherwise the "checked Xs ago" span below
