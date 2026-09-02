@@ -14,6 +14,7 @@ session watches the standby flag and resumes conversation when it flips false.
 Run with the voice-mode venv python (has sounddevice + numpy):
   ~/.local/share/uv/tools/voice-mode/bin/python wake_listener.py
 """
+import os
 import io
 import json
 import time
@@ -26,7 +27,7 @@ import numpy as np
 import sounddevice as sd
 
 HUD = "http://127.0.0.1:8123"
-WHISPER = "http://127.0.0.1:2022/v1/audio/transcriptions"
+WHISPER = os.environ.get("VOICE_HUD_WHISPER_URL", "http://127.0.0.1:2022/v1/audio/transcriptions")
 RATE = 16000
 CHUNK_SECONDS = 1.6  # short chunks = fast wake; "bella" alone matches, so a
                      # phrase split across a boundary still lands in chunk 2

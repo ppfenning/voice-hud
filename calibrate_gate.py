@@ -16,6 +16,7 @@ so this is safe to run while the daemon is live.
 
 Stdlib only, so any python3 will do.
 """
+import os
 import io
 import json
 import math
@@ -27,8 +28,8 @@ import urllib.request
 import uuid
 import wave
 
-WHISPER = "http://127.0.0.1:2022/v1/audio/transcriptions"
-KOKORO = "http://127.0.0.1:8880/v1/audio/speech"
+WHISPER = os.environ.get("VOICE_HUD_WHISPER_URL", "http://127.0.0.1:2022/v1/audio/transcriptions")
+KOKORO = os.environ.get("VOICE_HUD_KOKORO_URL", "http://127.0.0.1:8880/v1") + "/audio/speech"
 SR = 16000
 
 

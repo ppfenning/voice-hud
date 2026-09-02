@@ -18,3 +18,6 @@ says.json
 
 # macOS-only launchers, if you keep local unshared copies
 *.applescript
+
+# Local python env for the listener (sounddevice + numpy)
+.venv/

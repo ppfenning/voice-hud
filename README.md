@@ -44,20 +44,48 @@ erroring.
 No identifiers are hardcoded. The tracker integration is generic — it matches
 on project *names*, so it works against any workspace.
 
-## ⚠️ Platform status
+## Platform status
 
-Written on macOS, currently running on **Linux/WSL**. The core (server,
-listener, wake guard, HUD) is portable, but the launchers are not yet:
+Written on macOS, now running on **Linux** (Ubuntu, GNOME/Wayland, PipeWire)
+as well. The core (server, listener, wake guard, HUD) is portable; the
+launchers pick their platform at runtime:
 
-- `com.voicemode.always-on-listener.plist` is a launchd job. Templated with
-  `__VOICE_HUD_DIR__` / `__VOICEMODE_PYTHON__` / `__HOME__` placeholders, but a
-  systemd unit is the real answer on Linux.
-- `ensure_a2dp.sh` uses macOS Bluetooth tooling; the PipeWire/PulseAudio
-  equivalent is unwritten.
-- `launch.sh` opens Brave with a macOS-shaped invocation.
+| Piece | macOS | Linux |
+|---|---|---|
+| Listener supervisor | `com.voicemode.always-on-listener.plist` (launchd) | `systemd/voice-hud-listener.service` (systemd --user) |
+| HUD server | started by `launch.sh` via nohup | `systemd/voice-hud-server.service`; `launch.sh` starts the unit if it is down |
+| Browser open | `open -a "Brave Browser"` | `brave-browser`, then `xdg-open` |
+| HUD "spawn session" button | iTerm via osascript | Ptyxis, then `x-terminal-emulator` |
+| Bluetooth A2DP guard | `ensure_a2dp.sh` (SwitchAudioSource) | no-op — PipeWire/WirePlumber keeps A2DP itself; revisit if a headset drops to HFP |
 
-Audio capture through WSL needs attention too — `sounddevice` needs a working
-path to the host's microphone.
+### Linux install
 
-**Port checklist:** systemd unit · A2DP script for PipeWire · `launch.sh`
-browser invocation · verify capture through WSL.
+```bash
+sudo apt install libportaudio2 ffmpeg
+cd ~/repos/voice-hud && uv venv && uv pip install sounddevice numpy
+mkdir -p ~/.config/systemd/user
+cp systemd/*.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now voice-hud-server voice-hud-listener
+systemctl --user status voice-hud-listener      # must be active, or nothing is listening
+```
+
+Whisper and Kokoro come from voicemode's own service installers
+(`voicemode whisper install --use-gpu`, `voicemode kokoro install`), which
+register their own user units on the same ports this HUD expects.
+
+### Pointing at remote STT/TTS
+
+Both endpoints are env-overridable, so the speech services can live on
+another host (a homelab box, say) while the listener and HUD stay wherever
+the microphone is:
+
+| Env var | Default |
+|---|---|
+| `VOICE_HUD_WHISPER_URL` | `http://127.0.0.1:2022/v1/audio/transcriptions` |
+| `VOICE_HUD_KOKORO_URL` | `http://127.0.0.1:8880/v1` |
+
+Set them in the systemd units (`Environment=`) or the launchd plist. voicemode
+has its own equivalents (`VOICEMODE_STT_BASE_URLS`, `VOICEMODE_TTS_BASE_URLS`)
+that must be set alongside, or the HUD and the conversation will use different
+servers.

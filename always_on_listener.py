@@ -146,7 +146,7 @@ import sounddevice as sd
 from wake_guard import RMS_GATE, decoder_signals, describe, safe_judge_directive, transcript_text
 
 HUD = "http://127.0.0.1:8123"
-WHISPER = "http://127.0.0.1:2022/v1/audio/transcriptions"
+WHISPER = os.environ.get("VOICE_HUD_WHISPER_URL", "http://127.0.0.1:2022/v1/audio/transcriptions")
 HUD_DIR = Path(__file__).resolve().parent
 HEARTBEAT_FILE = HUD_DIR / "listening_heartbeat.json"
 DEBOUNCE_FILE = HUD_DIR / "wake_debounce.json"

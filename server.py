@@ -106,6 +106,8 @@ Stdlib only. Binds 127.0.0.1:8123.
 import io
 import json
 import os
+import sys
+import shutil
 import re
 import socket
 import subprocess
@@ -198,7 +200,7 @@ SAYS_STORED = 100   # durability cap, matches inbox_history
 SAYS_SERVED = 50    # feed-payload cap — only the newest slice reaches /state.json
 MAX_EVENTS = 800
 EASTERN = ZoneInfo("America/New_York")
-WHISPER_TRANSCRIBE_URL = "http://127.0.0.1:2022/v1/audio/transcriptions"
+WHISPER_TRANSCRIBE_URL = os.environ.get("VOICE_HUD_WHISPER_URL", "http://127.0.0.1:2022/v1/audio/transcriptions")
 MAX_AUDIO_BYTES = 10_000_000
 # Workspace + user identifiers come from the environment, never the source.
 # Unset means the Asana widgets simply render as unavailable (see asana_get).
@@ -598,7 +600,7 @@ _spawn_state = {"at": 0.0}
 
 
 def spawn_session(model, effort) -> dict:
-    """Open a new iTerm window running a plain-TEXT claude session — a second
+    """Open a new iTerm window (iTerm on macOS, Ptyxis or x-terminal-emulator on Linux) running a plain-TEXT claude session — a second
     VOICE session would fight this one for the mic, so /spawn never starts
     voicemode. Flags are whitelisted; anything else is silently omitted."""
     now = time.time()
@@ -609,16 +611,29 @@ def spawn_session(model, effort) -> dict:
             (f" --model {model}" if model in SPAWN_MODELS else "")
             + (f" --effort {effort}" if effort in SPAWN_EFFORTS else "")
         )
-        script = (
-            'tell application "iTerm"\n'
-            "\tactivate\n"
-            "\tcreate window with default profile\n"
-            "\ttell current session of current window\n"
-            f'\t\twrite text "cd ~/repos && claude{flags}"\n'
-            "\tend tell\n"
-            "end tell"
-        )
-        subprocess.Popen(["osascript", "-e", script])
+        command = f"cd ~/repos && claude{flags}"
+        if sys.platform == "darwin":
+            script = (
+                'tell application "iTerm"\n'
+                "\tactivate\n"
+                "\tcreate window with default profile\n"
+                "\ttell current session of current window\n"
+                f'\t\twrite text "{command}"\n'
+                "\tend tell\n"
+                "end tell"
+            )
+            subprocess.Popen(["osascript", "-e", script])
+        else:
+            # Linux: a new window in whichever terminal is installed, running
+            # the user's login shell so PATH and the claude binary resolve.
+            # `exec $SHELL` keeps the window open after claude exits.
+            shell = os.environ.get("SHELL", "/bin/bash")
+            inner = f"{command}; exec {shell}"
+            if shutil.which("ptyxis"):
+                argv = ["ptyxis", "--new-window", "--", shell, "-lc", inner]
+            else:
+                argv = ["x-terminal-emulator", "-e", shell, "-lc", inner]
+            subprocess.Popen(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         _spawn_state["at"] = now
         return {"ok": True, "command": f"claude{flags}".strip()}
 
@@ -846,7 +861,7 @@ def wav_bytes_rms(wav_bytes: bytes) -> float:
 # Replay re-synthesises through the SAME local kokoro that spoke it, in the
 # SAME voice: the personas are how he tells whose finding a line was, and a
 # generic browser SpeechSynthesis voice would erase exactly that.
-KOKORO_BASE = "http://127.0.0.1:8880/v1"
+KOKORO_BASE = os.environ.get("VOICE_HUD_KOKORO_URL", "http://127.0.0.1:8880/v1")
 KOKORO_SPEECH_URL = f"{KOKORO_BASE}/audio/speech"
 KOKORO_VOICES_URL = f"{KOKORO_BASE}/audio/voices"
 KOKORO_MODEL = "tts-1"
