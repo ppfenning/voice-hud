@@ -19,6 +19,11 @@ Endpoints:
                        written; read_standby()'s auto-idle logic only takes over
                        on a LATER read, so an explicit write here is never
                        immediately clobbered
+  GET  /cast        -> {"seats": [{name, voice, model, lane, surface}], "dir",
+                       "unavailable"} the standing agent cast, read from the
+                       seat definition files in VOICE_HUD_CAST_DIR (default
+                       ~/.claude/agents — see read_cast); also on state.json
+                       as "cast" so the reticle can draw the org ring
   GET  /tasks       -> {"items": [{id, label, status, ts, persona?, detail?,
                        heartbeat_file?, liveness, liveness_age}]} active ops
                        shown on the HUD; ts is server-stamped on each status
@@ -231,6 +236,77 @@ VOICE_ROSTER = (
     "af_bella", "af_heart", "af_nicole", "af_sky", "af_nova", "af_sarah",
     "af_aoede", "af_river", "bf_emma", "am_michael", "bm_fable", "bm_george",
 )
+
+
+# ---- the cast: who the seats are, read from their own definitions ----------
+# The HUD draws the org as a standing ring around the reticle. It does not
+# carry a roster of its own: the seats are the agent definition files a
+# session loads (`~/.claude/agents/*.md`, or wherever VOICE_HUD_CAST_DIR
+# points), so adding a seat there adds it here. Only frontmatter and one
+# regex over the body are read — name, tools, model, and the first
+# backticked voice id — and nothing here is required: a missing directory is
+# "unavailable", not an error.
+CAST_DIR = Path(os.environ.get("VOICE_HUD_CAST_DIR", Path.home() / ".claude" / "agents")).expanduser()
+CAST_CACHE_SECONDS = 30
+_WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
+_VOICE_RE = re.compile(r"`([a-z]{2}_[a-z]+)`")
+_cast_cache = {"at": 0.0, "value": None}
+
+
+def parse_seat(text: str) -> dict | None:
+    """Pure: one seat from one definition file's text, or None if it has no frontmatter."""
+    if not text.startswith("---\n"):
+        return None
+    parts = text.split("\n---\n", 1)
+    if len(parts) != 2:
+        return None
+    front, body = parts[0][4:], parts[1]
+    fields: dict = {}
+    key = None
+    for line in front.splitlines():
+        if line.startswith((" ", "\t")) and key:
+            fields[key] = (fields[key] + " " + line.strip()).strip()
+        elif ":" in line:
+            key, _, value = line.partition(":")
+            key = key.strip()
+            fields[key] = value.strip().lstrip("|>").strip()
+    name = fields.get("name")
+    if not name:
+        return None
+    tools = [t.strip() for t in fields.get("tools", "").split(",") if t.strip()]
+    voice = _VOICE_RE.search(body)
+    description = fields.get("description", "")
+    surface = re.split(r"[.:]\s", description, 1)[0][:90]
+    return {
+        "name": name,
+        "voice": voice.group(1) if voice else "",
+        "model": fields.get("model", ""),
+        "lane": "writes" if any(t in _WRITE_TOOLS for t in tools) else "reads",
+        "surface": surface,
+    }
+
+
+def fetch_cast() -> dict:
+    if not CAST_DIR.is_dir():
+        return {"seats": [], "dir": str(CAST_DIR), "unavailable": True}
+    seats = []
+    for path in sorted(CAST_DIR.glob("*.md")):
+        try:
+            seat = parse_seat(path.read_text(encoding="utf-8"))
+        except OSError:
+            seat = None
+        if seat:
+            seats.append(seat)
+    return {"seats": seats, "dir": str(CAST_DIR), "unavailable": False}
+
+
+def read_cast() -> dict:
+    """The cast, re-read at most every CAST_CACHE_SECONDS: state.json polls every second."""
+    now = time.time()
+    if _cast_cache["value"] is not None and now - _cast_cache["at"] < CAST_CACHE_SECONDS:
+        return _cast_cache["value"]
+    _cast_cache.update(at=now, value=fetch_cast())
+    return _cast_cache["value"]
 
 
 def read_events() -> tuple:
@@ -1430,6 +1506,7 @@ def build_state() -> dict:
         "muted": read_mute()["muted"],
         "standby": read_standby()["standby"],
         "tasks": read_tasks()["items"],
+        "cast": read_cast()["seats"],
         "worklog": read_worklog(session_lines),
         "session_active": session_active(),
         "plans": plans,
@@ -1477,6 +1554,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(json.dumps(read_standby()).encode(), "application/json")
         elif route == "/tasks":
             return self._send(json.dumps(read_tasks()).encode(), "application/json")
+        elif route == "/cast":
+            return self._send(json.dumps(read_cast()).encode(), "application/json")
         elif route == "/inbox":
             return self._send(json.dumps(read_inbox()).encode(), "application/json")
         elif route == "/health":
