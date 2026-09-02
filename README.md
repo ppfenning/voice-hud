@@ -89,3 +89,7 @@ Set them in the systemd units (`Environment=`) or the launchd plist. voicemode
 has its own equivalents (`VOICEMODE_STT_BASE_URLS`, `VOICEMODE_TTS_BASE_URLS`)
 that must be set alongside, or the HUD and the conversation will use different
 servers.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
