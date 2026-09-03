@@ -32,13 +32,31 @@ class _AnyAttributeModule(types.ModuleType):
         return placeholder
 
 
+_STUBBED = []
 for _name in ("numpy", "sounddevice"):
     try:
         importlib.import_module(_name)
     except ImportError:
         sys.modules[_name] = _AnyAttributeModule(_name)
+        _STUBBED.append(_name)
 
 from voice_hud import always_on_listener as aol  # noqa: E402
+
+# The listener holds its own references now; take the stand-ins back out of
+# sys.modules so nothing else (pytest.approx probes numpy) meets them.
+for _name in _STUBBED:
+    sys.modules.pop(_name, None)
+
+
+def _reload_listener():
+    """Reload with the stand-ins present, then take them out again."""
+    for _n in _STUBBED:
+        sys.modules[_n] = _AnyAttributeModule(_n)
+    try:
+        return importlib.reload(aol)
+    finally:
+        for _n in _STUBBED:
+            sys.modules.pop(_n, None)
 
 
 def test_unset_means_the_default_tuple_unchanged():
@@ -73,12 +91,12 @@ def test_the_comma_trap_is_real_and_documented():
 
 def test_the_module_level_tuple_comes_from_the_environment(monkeypatch, capsys):
     monkeypatch.setenv("VOICE_HUD_WAKE_PHRASES", "hey computer, nope")
-    mod = importlib.reload(aol)
+    mod = _reload_listener()
     try:
         assert mod.WAKE_WORDS == ("hey computer",)
         err = capsys.readouterr().err
         assert "refused 'nope'" in err and "effective wake phrases: ('hey computer',)" in err
     finally:
         monkeypatch.delenv("VOICE_HUD_WAKE_PHRASES")
-        importlib.reload(aol)
+        _reload_listener()
         assert aol.WAKE_WORDS == aol.DEFAULT_WAKE_WORDS
