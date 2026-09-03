@@ -24,7 +24,12 @@ class _AnyAttributeModule(types.ModuleType):
     def __getattr__(self, name):
         if name.startswith("__"):
             raise AttributeError(name)
-        return object
+        # A distinct placeholder class per name, never `object`: pytest.approx
+        # probes sys.modules["numpy"] and asks isinstance(x, np.ndarray), and
+        # with ndarray == object every float became "an array".
+        placeholder = type(name, (), {})
+        setattr(self, name, placeholder)
+        return placeholder
 
 
 for _name in ("numpy", "sounddevice"):
