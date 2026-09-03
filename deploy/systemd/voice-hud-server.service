@@ -1,5 +1,5 @@
 # voice-hud HUD server on 127.0.0.1:8123 — stdlib only, system python.
-# The checkout is assumed to live at ~/repos/voice-hud; edit the two paths
+# The checkout is assumed to live at ~/repos/agent-voice-hud; edit the two paths
 # below otherwise. The repo copy is the source of truth; the live file is a
 # plain copy:
 #   mkdir -p ~/.config/systemd/user
@@ -11,7 +11,7 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/repos/voice-hud
+WorkingDirectory=%h/repos/agent-voice-hud
 ExecStart=/usr/bin/python3 -m voice_hud.server
 Environment=VOICE_HUD_WATCH_PROJECT=%h/repos
 Restart=always
