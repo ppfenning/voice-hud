@@ -55,6 +55,25 @@ Endpoints:
                        heartbeat_file, once set, survives a later POST that
                        omits it (see stamp_tasks) so an unrelated field edit
                        can't silently drop the liveness handle.
+  GET  /work        -> {"due": [...], "boards": [...], "posted": bool} an
+                       external tracker's view of what's due and what its
+                       boards look like — a plain replace-list, no aging, no
+                       liveness (that machinery is /tasks-specific; see
+                       task_liveness/HEARTBEAT_STALE_SECONDS, which do NOT
+                       apply here). `posted` is true the moment ANYTHING has
+                       ever been POSTed, even an intentionally empty
+                       {"due": [], "boards": []} — it answers "has a poster
+                       ever spoken", not "is there anything to show", so the
+                       HUD can distinguish "no tracker configured" from "the
+                       tracker says nothing's due right now".
+  POST /work        -> replace the whole shape {"due": [...], "boards": [...]}
+                       (poster is the writer). Both fields are REQUIRED and
+                       must be lists — missing or wrong-typed either one is
+                       rejected 400 {"ok": false, "error": ...} and
+                       WORK_STATE_FILE is left untouched (no partial write).
+                       Filling this contract with real data (a tracker
+                       adapter, a markdown-directory backend, etc.) lives
+                       outside this repository.
   GET  /inbox       -> {"items": [{text, ts}]} typed directives from the page; the
                        Claude session polls before each converse and clears after acting
   POST /inbox       -> append a directive {"text": "..."}; counts as activity for
@@ -203,6 +222,7 @@ TASKS_FILE = HUD_DIR / "tasks.json"
 INBOX_FILE = HUD_DIR / "inbox.json"
 INBOX_HISTORY_FILE = HUD_DIR / "inbox_history.json"
 SAYS_FILE = HUD_DIR / "says.json"
+WORK_STATE_FILE = HUD_DIR / "work_state.json"
 SAYS_STORED = 100   # durability cap, matches inbox_history
 SAYS_SERVED = 50    # feed-payload cap — only the newest slice reaches /state.json
 MAX_EVENTS = 800
@@ -232,7 +252,7 @@ STATUS_BY_EVENT = {
     "SESSION_END": "standby",
 }
 
-VOICE_ROSTER = (
+DEFAULT_VOICE_ROSTER = (
     "af_bella", "af_heart", "af_nicole", "af_sky", "af_nova", "af_sarah",
     "af_aoede", "af_river", "bf_emma", "am_michael", "bm_fable", "bm_george",
 )
@@ -307,6 +327,37 @@ def read_cast() -> dict:
         return _cast_cache["value"]
     _cast_cache.update(at=now, value=fetch_cast())
     return _cast_cache["value"]
+def _is_kokoro_shaped(entry: str) -> bool:
+    """Pure: kokoro's own "xx_name" shape, e.g. "af_bella" — a NON-EMPTY
+    prefix and a NON-EMPTY suffix either side of the first underscore.
+    "_" in entry is not enough: "af_" and "_bella" both contain an
+    underscore but split to an empty half. persona_voice() reads
+    v.split("_", 1)[1] as the persona name, so an empty suffix does not
+    fail loudly — it becomes the match for a persona-less /replay (server
+    coerces a missing persona to ""), returns the junk id instead of
+    falling through to DEFAULT_REPLAY_VOICE, and the synthesis 503s. An
+    empty prefix is equally not a real kokoro id, so it is rejected too."""
+    prefix, sep, suffix = entry.partition("_")
+    return bool(sep) and bool(prefix) and bool(suffix)
+
+
+def parse_voice_roster(raw: str) -> tuple:
+    """Pure: a comma-separated VOICE_HUD_VOICE_ROSTER value into a tuple of
+    kokoro voice ids. Entries must be kokoro's own "xx_name" shape (e.g.
+    "af_bella"), NOT a bare display name ("bella") — persona_voice() below
+    reads the persona as the suffix after the FIRST underscore
+    (v.split("_", 1)[1]) for every entry in this roster, and it is called
+    from resolve_replay_voice()'s kokoro-unreachable fallback path, so a
+    malformed entry here is not a smaller roster, it silently breaks a
+    replay the next time one falls back to it (see _is_kokoro_shaped()).
+    Entries with no underscore, an empty prefix or suffix, and
+    blank/whitespace-only entries, are all dropped rather than propagated;
+    empty input yields an empty tuple, and the caller decides the
+    fallback, same shape as parse_speed()'s ValueError->default split."""
+    return tuple(v.strip() for v in raw.split(",") if _is_kokoro_shaped(v.strip()))
+
+
+VOICE_ROSTER = parse_voice_roster(os.environ.get("VOICE_HUD_VOICE_ROSTER", "")) or DEFAULT_VOICE_ROSTER
 
 
 def read_events() -> tuple:
@@ -561,6 +612,24 @@ def read_tasks_raw() -> list:
     )
     items = stored.get("items")
     return items if isinstance(items, list) else []
+
+
+def read_work_state() -> dict:
+    """The /work contract: a plain replace-list, no aging, no liveness —
+    that machinery is /tasks-specific (see task_liveness). `posted` answers
+    "has anything ever been posted here", derived from WORK_STATE_FILE's
+    EXISTENCE, not from `due`/`boards` being non-empty — a poster that
+    legitimately has nothing due and no boards still gets to say so, and
+    that must read as posted:true, not as "nobody's ever called this"."""
+    exists = WORK_STATE_FILE.exists()
+    stored = (parse_json(WORK_STATE_FILE.read_text()) or {}) if exists else {}
+    due = stored.get("due")
+    boards = stored.get("boards")
+    return {
+        "due": due if isinstance(due, list) else [],
+        "boards": boards if isinstance(boards, list) else [],
+        "posted": exists,
+    }
 
 
 def heartbeat_age(path):
@@ -1507,6 +1576,7 @@ def build_state() -> dict:
         "standby": read_standby()["standby"],
         "tasks": read_tasks()["items"],
         "cast": read_cast()["seats"],
+        "work": read_work_state(),
         "worklog": read_worklog(session_lines),
         "session_active": session_active(),
         "plans": plans,
@@ -1556,6 +1626,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(json.dumps(read_tasks()).encode(), "application/json")
         elif route == "/cast":
             return self._send(json.dumps(read_cast()).encode(), "application/json")
+        elif route == "/work":
+            return self._send(json.dumps(read_work_state()).encode(), "application/json")
         elif route == "/inbox":
             return self._send(json.dumps(read_inbox()).encode(), "application/json")
         elif route == "/health":
@@ -1691,6 +1763,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(json.dumps({"ok": True, "count": len(items)}).encode(), "application/json")
             else:
                 return self._send(json.dumps({"ok": False, "error": "items must be a list"}).encode(), "application/json", 400)
+        elif route == "/work":
+            due = payload.get("due")
+            boards = payload.get("boards")
+            if isinstance(due, list) and isinstance(boards, list):
+                WORK_STATE_FILE.write_text(json.dumps({"due": due, "boards": boards}))
+                return self._send(json.dumps({"ok": True}).encode(), "application/json")
+            else:
+                return self._send(json.dumps({"ok": False, "error": "due and boards must both be lists"}).encode(), "application/json", 400)
         elif route == "/inbox":
             text = str(payload.get("text") or "").strip()[:2000]
             if text:

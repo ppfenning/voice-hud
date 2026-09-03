@@ -107,6 +107,7 @@ All optional. Unset means the default, never an error.
 | `VOICE_HUD_KOKORO_URL` | `http://127.0.0.1:8880/v1` | TTS endpoint, used to replay comms lines. |
 | `VOICE_HUD_TZ` | `America/New_York` | Timezone for the timestamps the HUD shows. |
 | `VOICE_HUD_HEADSET` | unset | macOS only: the output device `ensure_a2dp.sh` re-selects before a voice turn. |
+| `VOICE_HUD_VOICE_ROSTER` | the built-in roster (`af_bella`, `af_heart`, ... `bm_george`) | Comma-separated kokoro voice ids, each in kokoro's own `xx_name` form (e.g. `af_bella`; entries not shaped like `xx_name` — no underscore, or an empty prefix/suffix — are dropped) — the set `/voice` will accept. Only reaches `/replay` as the last-resort fallback when the live kokoro voice list has never been fetched; while kokoro is reachable, replay resolves against kokoro's own list instead. Read once at server startup. |
 | `VOICEHUD_DIRECTIVE_GATE` | `full` | `off` keeps only the legacy phrase blocklist, `heuristic` skips the LLM tier. Writing `{"mode": ...}` to `gate_mode.json` in the state dir does the same for an already-running listener. |
 | `STANDBY_IDLE_SECONDS` | see `server.py` | Idle time before the session is auto-marked standby. |
 | `VOICEMODE_CONTROL_SOCKET`, `VOICEMODE_TTS_SPEED` | voicemode's | Passed through so cut/skip and replay match the live conversation. |
@@ -128,6 +129,7 @@ the top of `voice_hud/server.py`. In short:
 | `GET/POST /mute` | Quiet mode. Muted means no TTS **and** no listening; the server enforces it, not just the page. |
 | `GET/POST /standby` | Idle flag for background waiters. |
 | `GET/POST /tasks` | The "active ops" list a session publishes about its agents, with server-side liveness probing via each item's `heartbeat_file`. |
+| `GET/POST /work` | An external tracker's view of what's due and what its boards look like: a plain replace-list, with none of `/tasks`' aging or liveness machinery. `posted` answers "has a poster ever spoken", not "is there anything to show" — an intentionally empty post still reads as posted. |
 | `GET/POST /inbox`, `POST /inbox/clear` | Directives from the page or the wake listener; the session polls before each turn. |
 | `POST /inbox/audio` | A WAV body: rejected as silence or filler by the same gate as the ambient wake, otherwise transcribed and queued. |
 | `POST /say` | Append a text-only assistant line while muted. |
