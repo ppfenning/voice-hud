@@ -5,7 +5,7 @@
 # singleton lock makes a manual launch alongside this a safe no-op.
 #
 # Needs a python with sounddevice + numpy (libportaudio2 from apt):
-#   cd ~/repos/voice-hud && uv venv && uv pip install -e ".[listener]"
+#   cd ~/repos/agent-voice-hud && uv venv && uv pip install -e ".[listener]"
 # Install:
 #   cp deploy/systemd/voice-hud-listener.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload && systemctl --user enable --now voice-hud-listener
@@ -17,8 +17,8 @@ Wants=voice-hud-server.service
 
 [Service]
 Type=simple
-WorkingDirectory=%h/repos/voice-hud
-ExecStart=%h/repos/voice-hud/.venv/bin/python -m voice_hud.always_on_listener
+WorkingDirectory=%h/repos/agent-voice-hud
+ExecStart=%h/repos/agent-voice-hud/.venv/bin/python -m voice_hud.always_on_listener
 Restart=always
 RestartSec=3
 

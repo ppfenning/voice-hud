@@ -55,8 +55,8 @@ TTS), which default to localhost too.
 
 ```bash
 sudo apt install libportaudio2 ffmpeg
-git clone https://github.com/ppfenning/agent-voice-hud ~/repos/voice-hud
-cd ~/repos/voice-hud
+git clone https://github.com/ppfenning/agent-voice-hud ~/repos/agent-voice-hud
+cd ~/repos/agent-voice-hud
 uv venv && uv pip install -e ".[listener]"
 mkdir -p ~/.config/systemd/user
 cp deploy/systemd/*.service ~/.config/systemd/user/
@@ -65,7 +65,7 @@ systemctl --user enable --now voice-hud-server voice-hud-listener
 systemctl --user status voice-hud-listener      # must be active, or nothing is listening
 ```
 
-The units assume the checkout lives at `~/repos/voice-hud` and that the
+The units assume the checkout lives at `~/repos/agent-voice-hud` and that the
 listener's venv is `.venv/` inside it; edit `WorkingDirectory` and
 `ExecStart` otherwise.
 
@@ -88,7 +88,7 @@ Add a Claude Code `PreToolUse` hook on voicemode's converse tool. In
     "PreToolUse": [
       {
         "matcher": "mcp__.*voicemode.*__converse",
-        "hooks": [{ "type": "command", "command": "$HOME/repos/voice-hud/scripts/launch.sh" }]
+        "hooks": [{ "type": "command", "command": "$HOME/repos/agent-voice-hud/scripts/launch.sh" }]
       }
     ]
   }
