@@ -14,15 +14,24 @@ import types
 
 import pytest
 
+class _AnyAttributeModule(types.ModuleType):
+    """A stand-in that answers every attribute — the listener's import path
+    touches numpy and sounddevice names in annotations and defaults
+    (`sd.InputStream`, `np.ndarray`, `np.int16`, ...), and a stub that guesses
+    the list is a CI failure the day a new one appears. Nothing here is ever
+    CALLED by these tests; only module-load has to succeed."""
+
+    def __getattr__(self, name):
+        if name.startswith("__"):
+            raise AttributeError(name)
+        return object
+
+
 for _name in ("numpy", "sounddevice"):
     try:
         importlib.import_module(_name)
     except ImportError:
-        _stub = types.ModuleType(_name)
-        if _name == "numpy":
-            _stub.ndarray = object  # the only attribute the listener's import path touches at load
-            _stub.int16 = "int16"
-        sys.modules[_name] = _stub
+        sys.modules[_name] = _AnyAttributeModule(_name)
 
 from voice_hud import always_on_listener as aol  # noqa: E402
 
