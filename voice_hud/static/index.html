@@ -226,6 +226,19 @@
     display: flex; flex-direction: column; gap: .4rem; z-index: 3;
   }
   .voices .vlabel { font-size: .6rem; letter-spacing: .22em; color: var(--gold-dim); margin-bottom: .2rem; }
+  /* the /work contract's two widgets: what is due, and the boards' sections.
+     Rendered only once something has POSTed (posted:true); before that the
+     panel stays hidden — "no poster configured" is not a list of nothing. */
+  .work-widget .due-row { display: flex; gap: .5rem; align-items: baseline; font-size: .74rem; padding: .12rem 0; }
+  .work-widget .due-row .when { color: var(--gold-dim); font-size: .62rem; letter-spacing: .08em; min-width: 5.2em; }
+  .work-widget .due-row.today .when { color: var(--gold); text-shadow: 0 0 6px var(--gold-glow); }
+  .work-widget .due-row .title { color: var(--white); opacity: .9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .work-widget .board { margin-top: .35rem; }
+  .work-widget .board .bname { font-size: .58rem; letter-spacing: .18em; color: var(--mute); }
+  .work-widget .section { display: flex; gap: .45rem; align-items: baseline; font-size: .7rem; padding: .08rem 0 .08rem .4rem; }
+  .work-widget .section .count { color: var(--gold-dim); font-variant-numeric: tabular-nums; min-width: 1.6em; text-align: right; }
+  .work-widget .section .sname { color: var(--white); opacity: .8; }
+  .work-widget .empty { font-size: .68rem; color: var(--mute); }
   .voices .roster { display: flex; flex-direction: column; gap: .4rem; }
   /* the voice roster's length is server-driven (12 voices today, measured
      367px uncapped) and the drawer is vertically centered — uncapped, a
@@ -840,6 +853,7 @@
   </div>
   <div class="left-stack" id="leftStack">
     <div class="voices stacked" id="plans" hidden><div class="vlabel">VISUAL PLANS</div></div>
+    <div class="voices stacked work-widget" id="work" hidden><div class="vlabel">WORK</div></div>
   </div>
   <div class="right-rail" id="rightRail">
   <div class="ops" id="ops" hidden><div class="olabel">ACTIVE OPS</div></div>
@@ -906,7 +920,7 @@ const opsEl = document.getElementById('ops');
 const tintEl = document.getElementById('tint');
 const bootEl = document.getElementById('boot');
 const muteBadgeSub = document.getElementById('muteBadgeSub');
-let prevStandby = null, currentTasks = [], currentCast = [];
+let prevStandby = null, currentTasks = [], currentCast = [], lastWorkKey = null;
 let opFlash = {}, prevOpStatuses = {}, lastBusyAt = performance.now();
 const escT = s => s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 bootEl.addEventListener('animationend', e => { if (e.target === bootEl) bootEl.classList.remove('run'); });
@@ -2416,6 +2430,31 @@ async function poll() {
     // live/dead status flipped — otherwise the "checked Xs ago" span below
     // would freeze at whatever epoch happened to be baked in at the last
     // list change, silently going stale itself (08-18).
+    // ---- the /work widgets: read EXACTLY the server's field names ----
+    // read_work_state() emits {due, boards, posted}; due entries carry
+    // id/title/due(/url); boards carry name + sections[{name, items[]}].
+    // tests/test_work_widgets.py locks these names on both sides.
+    const work = s.work || null;
+    const workKey = JSON.stringify(work);
+    if (workKey !== lastWorkKey) {
+      lastWorkKey = workKey;
+      const workEl = document.getElementById('work');
+      if (!work || !work.posted) {
+        workEl.hidden = true;
+      } else {
+        workEl.hidden = false;
+        const today = new Date().toISOString().slice(0, 10);
+        const due = (work.due || []).slice(0, 8);
+        const boards = work.boards || [];
+        const dueHtml = due.length
+          ? due.map(d => `<div class="due-row${String(d.due || '') === today ? ' today' : ''}"><span class="when">${esc(String(d.due || '').slice(5) || '—')}</span><span class="title" title="${esc(String(d.id || ''))}">${esc(String(d.title || d.id || ''))}</span></div>`).join('')
+          : '<div class="empty">nothing due</div>';
+        const boardsHtml = boards.length
+          ? boards.map(b => `<div class="board"><div class="bname">${esc(String(b.name || ''))}</div>${(b.sections || []).map(sec => `<div class="section"><span class="count">${(sec.items || []).length}</span><span class="sname">${esc(String(sec.name || ''))}</span></div>`).join('')}</div>`).join('')
+          : '<div class="empty">no boards</div>';
+        workEl.innerHTML = '<div class="vlabel">DUE</div>' + dueHtml + '<div class="vlabel" style="margin-top:.4rem">BOARDS</div>' + boardsHtml;
+      }
+    }
     const plansKey = JSON.stringify([s.plans || [], s.plans_checked_epoch]);
     if (plansKey !== lastPlansKey) {
       lastPlansKey = plansKey;

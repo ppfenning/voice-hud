@@ -225,12 +225,57 @@ STALL_GRACE_SECONDS = 2.0       # after a stuck read times out, how long to
 # bella stays as a transition alias until the owner says to drop it. "jervis" is
 # whisper's common mis-transcription of the name, same role "bela" plays
 # for bella.
-WAKE_WORDS = (
+DEFAULT_WAKE_WORDS = (
     "hey jarvis", "hey, jarvis", "wake up jarvis", "wake up, jarvis",
     "okay jarvis", "ok jarvis", "hey jervis", "hey, jervis",
     "hey bella", "hey, bella", "wake up bella", "wake up, bella",
     "okay bella", "ok bella", "hey bela", "hey, bela",
 )
+
+
+def parse_wake_phrases(raw, default=DEFAULT_WAKE_WORDS):
+    """Pure: the effective wake phrases from VOICE_HUD_WAKE_PHRASES, and why
+    any entry was refused. Comma-separated, each lower-cased and trimmed.
+
+    The "phrase, not name" rule above applies to the env path too: an entry
+    with no space is a bare word and is dropped, never accepted. If every
+    entry is refused, the default tuple stands rather than an empty one.
+
+    Comma trap: the separator is the comma, so a value like "wake up, bella"
+    is TWO entries, "wake up" and "bella" — the second is refused as a bare
+    word, and the first becomes a live trigger that heard_wake_word() will
+    substring-match anywhere in a transcript ("I'll wake up early" fires).
+    Spell each phrase without its internal comma ("wake up bella"), and read
+    the startup log, which names every effective phrase.
+
+    Returns (phrases, refused) where refused is a list of (entry, reason)."""
+    if raw is None or not str(raw).strip():
+        return tuple(default), []
+    kept, refused = [], []
+    for entry in str(raw).split(","):
+        phrase = " ".join(entry.strip().lower().split())
+        if not phrase:
+            continue
+        if " " not in phrase:
+            refused.append((phrase, "bare single word — a wake needs a phrase, never a name"))
+            continue
+        if phrase not in kept:
+            kept.append(phrase)
+    if not kept:
+        refused.append(("<all>", "every entry refused — falling back to the default phrases"))
+        return tuple(default), refused
+    return tuple(kept), refused
+
+
+_WAKE_OVERRIDE = os.environ.get("VOICE_HUD_WAKE_PHRASES")
+WAKE_WORDS, _WAKE_REFUSED = parse_wake_phrases(_WAKE_OVERRIDE)
+if _WAKE_OVERRIDE is not None:
+    # log_line() is defined further down; at import time the daemon's stderr
+    # is the same place it writes to, so say it now, in the same shape.
+    _stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    for _entry, _why in _WAKE_REFUSED:
+        print(f"[{_stamp}] VOICE_HUD_WAKE_PHRASES: refused {_entry!r}: {_why}", file=sys.stderr, flush=True)
+    print(f"[{_stamp}] VOICE_HUD_WAKE_PHRASES set — effective wake phrases: {WAKE_WORDS}", file=sys.stderr, flush=True)
 
 
 def hud_get(path: str) -> dict:
