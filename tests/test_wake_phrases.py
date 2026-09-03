@@ -14,17 +14,49 @@ import types
 
 import pytest
 
+class _AnyAttributeModule(types.ModuleType):
+    """A stand-in that answers every attribute — the listener's import path
+    touches numpy and sounddevice names in annotations and defaults
+    (`sd.InputStream`, `np.ndarray`, `np.int16`, ...), and a stub that guesses
+    the list is a CI failure the day a new one appears. Nothing here is ever
+    CALLED by these tests; only module-load has to succeed."""
+
+    def __getattr__(self, name):
+        if name.startswith("__"):
+            raise AttributeError(name)
+        # A distinct placeholder class per name, never `object`: pytest.approx
+        # probes sys.modules["numpy"] and asks isinstance(x, np.ndarray), and
+        # with ndarray == object every float became "an array".
+        placeholder = type(name, (), {})
+        setattr(self, name, placeholder)
+        return placeholder
+
+
+_STUBBED = []
 for _name in ("numpy", "sounddevice"):
     try:
         importlib.import_module(_name)
     except ImportError:
-        _stub = types.ModuleType(_name)
-        if _name == "numpy":
-            _stub.ndarray = object  # the only attribute the listener's import path touches at load
-            _stub.int16 = "int16"
-        sys.modules[_name] = _stub
+        sys.modules[_name] = _AnyAttributeModule(_name)
+        _STUBBED.append(_name)
 
 from voice_hud import always_on_listener as aol  # noqa: E402
+
+# The listener holds its own references now; take the stand-ins back out of
+# sys.modules so nothing else (pytest.approx probes numpy) meets them.
+for _name in _STUBBED:
+    sys.modules.pop(_name, None)
+
+
+def _reload_listener():
+    """Reload with the stand-ins present, then take them out again."""
+    for _n in _STUBBED:
+        sys.modules[_n] = _AnyAttributeModule(_n)
+    try:
+        return importlib.reload(aol)
+    finally:
+        for _n in _STUBBED:
+            sys.modules.pop(_n, None)
 
 
 def test_unset_means_the_default_tuple_unchanged():
@@ -59,12 +91,12 @@ def test_the_comma_trap_is_real_and_documented():
 
 def test_the_module_level_tuple_comes_from_the_environment(monkeypatch, capsys):
     monkeypatch.setenv("VOICE_HUD_WAKE_PHRASES", "hey computer, nope")
-    mod = importlib.reload(aol)
+    mod = _reload_listener()
     try:
         assert mod.WAKE_WORDS == ("hey computer",)
         err = capsys.readouterr().err
         assert "refused 'nope'" in err and "effective wake phrases: ('hey computer',)" in err
     finally:
         monkeypatch.delenv("VOICE_HUD_WAKE_PHRASES")
-        importlib.reload(aol)
+        _reload_listener()
         assert aol.WAKE_WORDS == aol.DEFAULT_WAKE_WORDS
